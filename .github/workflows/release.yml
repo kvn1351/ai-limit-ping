@@ -28,7 +28,7 @@ jobs:
             archive_name: alp-aarch64-apple-darwin.tar.gz
             bin_name: alp
           # macOS Intel
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             archive_name: alp-x86_64-apple-darwin.tar.gz
             bin_name: alp
@@ -63,10 +63,11 @@ jobs:
 
       - name: Package archive (Windows)
         if: matrix.os == 'windows-latest'
-        shell: bash
+        shell: pwsh
         run: |
-          7z a ${{ matrix.archive_name }} ./target/${{ matrix.target }}/release/${{ matrix.bin_name }}
-          shasum -a 256 ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" -DestinationPath "${{ matrix.archive_name }}" -Force
+          $hash = (Get-FileHash -Path "${{ matrix.archive_name }}" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.archive_name }}" | Out-File -FilePath "${{ matrix.archive_name }}.sha256" -Encoding ascii
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
