@@ -37,7 +37,7 @@ impl Default for Config {
                 "antigravity".to_string(),
                 "claude".to_string(),
             ],
-            codex_model: None,
+            codex_model: Some("gpt-5.6-luna".to_string()),
             antigravity_model: Some("gemini-3.8-flash-low".to_string()),
             claude_model: None,
             notify: true,

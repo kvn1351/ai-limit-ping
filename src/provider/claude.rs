@@ -33,13 +33,7 @@ impl ClaudeProvider {
     }
 
     fn resolve_claude_binary() -> PathBuf {
-        if let Some(home) = dirs::home_dir() {
-            let local_bin = home.join(".local/bin/claude");
-            if local_bin.exists() {
-                return local_bin;
-            }
-        }
-        PathBuf::from("claude")
+        super::resolve_binary_path("claude")
     }
 
     async fn get_access_token() -> Option<String> {

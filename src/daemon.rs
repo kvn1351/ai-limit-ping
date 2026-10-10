@@ -32,13 +32,17 @@ impl DaemonManager {
 
     #[cfg(target_os = "macos")]
     fn generate_launchd_plist(bin_path: &PathBuf) -> String {
-        let log_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".local/share/ai-limit-ping");
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let log_dir = home.join(".local/share/ai-limit-ping");
         let _ = fs::create_dir_all(&log_dir);
 
         let stdout_log = log_dir.join("daemon.stdout.log");
         let stderr_log = log_dir.join("daemon.stderr.log");
+
+        let local_bin = home.join(".local/bin").display().to_string();
+        let cargo_bin = home.join(".cargo/bin").display().to_string();
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let env_path = format!("{}:{}:/opt/homebrew/bin:/usr/local/bin:{}", local_bin, cargo_bin, current_path);
 
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -54,6 +58,13 @@ impl DaemonManager {
     </array>
     <key>WorkingDirectory</key>
     <string>{workdir}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path}</string>
+        <key>HOME</key>
+        <string>{home}</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -68,6 +79,8 @@ impl DaemonManager {
             label = MACOS_LABEL,
             bin = bin_path.display(),
             workdir = log_dir.display(),
+            path = env_path,
+            home = home.display(),
             stdout = stdout_log.display(),
             stderr = stderr_log.display()
         )
@@ -83,10 +96,14 @@ impl DaemonManager {
 
     #[cfg(target_os = "linux")]
     fn generate_systemd_unit(bin_path: &PathBuf) -> String {
-        let work_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".local/share/ai-limit-ping");
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let work_dir = home.join(".local/share/ai-limit-ping");
         let _ = fs::create_dir_all(&work_dir);
+
+        let local_bin = home.join(".local/bin").display().to_string();
+        let cargo_bin = home.join(".cargo/bin").display().to_string();
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let env_path = format!("{}:{}:/usr/local/bin:{}", local_bin, cargo_bin, current_path);
 
         format!(
             r#"[Unit]
@@ -97,6 +114,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory={workdir}
+Environment="PATH={path}"
 ExecStart={bin} watch
 Restart=always
 RestartSec=10
@@ -105,7 +123,8 @@ RestartSec=10
 WantedBy=default.target
 "#,
             bin = bin_path.display(),
-            workdir = work_dir.display()
+            workdir = work_dir.display(),
+            path = env_path
         )
     }
 

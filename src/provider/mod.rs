@@ -56,25 +56,34 @@ pub fn get_sandbox_dir() -> std::path::PathBuf {
     p
 }
 
-/// Cross-platform helper to check if a binary exists in PATH or user local bin directory
-pub fn is_binary_available(name: &str) -> bool {
+/// Cross-platform helper to resolve the full executable path of a CLI tool.
+/// Checks absolute paths, ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin, and PATH.
+pub fn resolve_binary_path(name: &str) -> std::path::PathBuf {
     let path = std::path::Path::new(name);
     if path.is_absolute() && path.exists() {
-        return true;
+        return path.to_path_buf();
     }
 
     if let Some(home) = dirs::home_dir() {
-        let local_bin = home.join(".local/bin").join(name);
-        if local_bin.exists() {
-            return true;
-        }
-        #[cfg(windows)]
-        {
-            if local_bin.with_extension("exe").exists()
-                || local_bin.with_extension("cmd").exists()
-                || local_bin.with_extension("bat").exists()
+        let candidates = [
+            home.join(".local/bin").join(name),
+            std::path::PathBuf::from("/opt/homebrew/bin").join(name),
+            std::path::PathBuf::from("/usr/local/bin").join(name),
+            home.join(".cargo/bin").join(name),
+        ];
+
+        for cand in &candidates {
+            if cand.is_file() {
+                return cand.clone();
+            }
+            #[cfg(windows)]
             {
-                return true;
+                for ext in &["exe", "cmd", "bat"] {
+                    let with_ext = cand.with_extension(ext);
+                    if with_ext.is_file() {
+                        return with_ext;
+                    }
+                }
             }
         }
     }
@@ -84,19 +93,32 @@ pub fn is_binary_available(name: &str) -> bool {
         for dir in path_var.split(separator) {
             let p = std::path::Path::new(dir).join(name);
             if p.is_file() {
-                return true;
+                return p;
             }
             #[cfg(windows)]
             {
-                if p.with_extension("exe").is_file()
-                    || p.with_extension("cmd").is_file()
-                    || p.with_extension("bat").is_file()
-                {
-                    return true;
+                for ext in &["exe", "cmd", "bat"] {
+                    let with_ext = p.with_extension(ext);
+                    if with_ext.is_file() {
+                        return with_ext;
+                    }
                 }
             }
         }
     }
 
-    false
+    std::path::PathBuf::from(name)
+}
+
+/// Cross-platform helper to check if a binary exists in PATH or user local bin directory
+pub fn is_binary_available(name: &str) -> bool {
+    let resolved = resolve_binary_path(name);
+    if resolved.is_absolute() {
+        resolved.is_file()
+    } else {
+        std::process::Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
 }

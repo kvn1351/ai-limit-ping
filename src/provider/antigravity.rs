@@ -58,13 +58,7 @@ impl AntigravityProvider {
                 return p;
             }
         }
-        if let Some(home) = dirs::home_dir() {
-            let local_bin = home.join(".local/bin/agy");
-            if local_bin.exists() {
-                return local_bin;
-            }
-        }
-        PathBuf::from("agy")
+        super::resolve_binary_path("agy")
     }
 }
 

@@ -321,10 +321,9 @@ impl Provider for CodexProvider {
             "model_reasoning_effort=low".to_string(),
         ];
 
-        if let Some(model) = &self.custom_model {
-            args.push("-m".to_string());
-            args.push(model.clone());
-        }
+        let model = self.custom_model.as_deref().unwrap_or("gpt-5.6-luna");
+        args.push("-m".to_string());
+        args.push(model.to_string());
 
         args.push("ok".to_string());
 
@@ -340,7 +339,8 @@ impl Provider for CodexProvider {
         }
 
         let sandbox = super::get_sandbox_dir();
-        let output = Command::new("codex")
+        let bin = super::resolve_binary_path("codex");
+        let output = Command::new(&bin)
             .current_dir(&sandbox)
             .args(&args)
             .stdin(Stdio::null())
@@ -348,7 +348,7 @@ impl Provider for CodexProvider {
             .stderr(Stdio::piped())
             .output()
             .await
-            .context("Failed to run codex binary. Ensure `codex` is on your PATH.")?;
+            .with_context(|| format!("Failed to run codex binary at {}. Ensure `codex` is installed.", bin.display()))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
