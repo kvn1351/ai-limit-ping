@@ -109,15 +109,10 @@ impl Provider for ClaudeProvider {
 
     async fn is_available(&self) -> bool {
         let bin = Self::resolve_claude_binary();
-        if bin.is_absolute() {
-            bin.exists()
+        if bin.is_absolute() && bin.exists() {
+            true
         } else {
-            Command::new("which")
-                .arg("claude")
-                .output()
-                .await
-                .map(|o| o.status.success())
-                .unwrap_or(false)
+            super::is_binary_available("claude")
         }
     }
 

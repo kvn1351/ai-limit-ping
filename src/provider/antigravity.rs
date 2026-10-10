@@ -80,15 +80,10 @@ impl Provider for AntigravityProvider {
 
     async fn is_available(&self) -> bool {
         let bin = Self::resolve_agy_binary();
-        if bin.is_absolute() {
-            bin.exists()
+        if bin.is_absolute() && bin.exists() {
+            true
         } else {
-            Command::new("which")
-                .arg("agy")
-                .output()
-                .await
-                .map(|o| o.status.success())
-                .unwrap_or(false)
+            super::is_binary_available("agy")
         }
     }
 

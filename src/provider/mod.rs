@@ -46,3 +46,48 @@ pub trait Provider: Send + Sync {
     /// Detects if an active user turn is already in progress, avoiding synthetic interference
     async fn is_active_task_running(&self) -> Result<bool>;
 }
+
+/// Cross-platform helper to check if a binary exists in PATH or user local bin directory
+pub fn is_binary_available(name: &str) -> bool {
+    let path = std::path::Path::new(name);
+    if path.is_absolute() && path.exists() {
+        return true;
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let local_bin = home.join(".local/bin").join(name);
+        if local_bin.exists() {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            if local_bin.with_extension("exe").exists()
+                || local_bin.with_extension("cmd").exists()
+                || local_bin.with_extension("bat").exists()
+            {
+                return true;
+            }
+        }
+    }
+
+    if let Ok(path_var) = std::env::var("PATH") {
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        for dir in path_var.split(separator) {
+            let p = std::path::Path::new(dir).join(name);
+            if p.is_file() {
+                return true;
+            }
+            #[cfg(windows)]
+            {
+                if p.with_extension("exe").is_file()
+                    || p.with_extension("cmd").is_file()
+                    || p.with_extension("bat").is_file()
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}

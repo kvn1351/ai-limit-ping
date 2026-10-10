@@ -4,6 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[allow(dead_code)]
+const SERVICE_NAME: &str = "ai-limit-ping";
 const MACOS_LABEL: &str = "com.user.ai-limit-ping";
 
 pub struct DaemonManager;
@@ -61,6 +63,35 @@ impl DaemonManager {
         )
     }
 
+    #[cfg(target_os = "linux")]
+    fn systemd_unit_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from(".config"))
+            .join("systemd/user")
+            .join(format!("{}.service", SERVICE_NAME))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn generate_systemd_unit(bin_path: &PathBuf) -> String {
+        format!(
+            r#"[Unit]
+Description=AI Limit Ping Daemon (alp)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={bin} watch
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+"#,
+            bin = bin_path.display()
+        )
+    }
+
     pub fn install() -> Result<()> {
         let exe = Self::current_exe()?;
 
@@ -73,7 +104,6 @@ impl DaemonManager {
             let plist_content = Self::generate_launchd_plist(&exe);
             fs::write(&plist_path, plist_content)?;
 
-            // Unload if already loaded
             let _ = Command::new("launchctl")
                 .args(["unload", plist_path.to_str().unwrap()])
                 .output();
@@ -124,9 +154,34 @@ impl DaemonManager {
             }
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "linux")]
         {
-            println!("{}", "Daemon installation is currently supported on macOS and Windows.".yellow());
+            let unit_path = Self::systemd_unit_path();
+            if let Some(parent) = unit_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let unit_content = Self::generate_systemd_unit(&exe);
+            fs::write(&unit_path, unit_content)?;
+
+            let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+            let status = Command::new("systemctl")
+                .args(["--user", "enable", "--now", &format!("{}.service", SERVICE_NAME)])
+                .status()?;
+
+            if status.success() {
+                println!(
+                    "{} Installed and enabled systemd user service at {}",
+                    "✓".green().bold(),
+                    unit_path.display()
+                );
+            } else {
+                return Err(anyhow!("Failed to enable systemd service via systemctl --user"));
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            println!("{}", "Daemon installation is not supported on this platform.".yellow());
         }
 
         Ok(())
@@ -156,6 +211,19 @@ impl DaemonManager {
             println!("{} Uninstalled Windows scheduled task", "✓".green());
         }
 
+        #[cfg(target_os = "linux")]
+        {
+            let _ = Command::new("systemctl")
+                .args(["--user", "disable", "--now", &format!("{}.service", SERVICE_NAME)])
+                .status();
+            let unit_path = Self::systemd_unit_path();
+            if unit_path.exists() {
+                fs::remove_file(&unit_path)?;
+            }
+            let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+            println!("{} Uninstalled systemd user service", "✓".green());
+        }
+
         Ok(())
     }
 
@@ -178,6 +246,16 @@ impl DaemonManager {
             println!("{} Started Windows daemon task", "✓".green());
         }
 
+        #[cfg(target_os = "linux")]
+        {
+            let status = Command::new("systemctl")
+                .args(["--user", "start", &format!("{}.service", SERVICE_NAME)])
+                .status()?;
+            if status.success() {
+                println!("{} Started systemd service {}", "✓".green(), SERVICE_NAME);
+            }
+        }
+
         Ok(())
     }
 
@@ -198,6 +276,16 @@ impl DaemonManager {
                 .args(["/end", "/tn", "AILimitPingDaemon"])
                 .status()?;
             println!("{} Stopped Windows daemon task", "✓".green());
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let status = Command::new("systemctl")
+                .args(["--user", "stop", &format!("{}.service", SERVICE_NAME)])
+                .status()?;
+            if status.success() {
+                println!("{} Stopped systemd service {}", "✓".green(), SERVICE_NAME);
+            }
         }
 
         Ok(())
@@ -226,6 +314,16 @@ impl DaemonManager {
                 println!("{} Daemon task is registered:\n{}", "✓".green().bold(), String::from_utf8_lossy(&out.stdout));
             } else {
                 println!("{} Daemon task is not registered. Run `alp daemon install`.", "!".yellow());
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let status = Command::new("systemctl")
+                .args(["--user", "status", &format!("{}.service", SERVICE_NAME)])
+                .status()?;
+            if !status.success() {
+                println!("{} Daemon service is not active. Run `alp daemon install`.", "!".yellow());
             }
         }
 

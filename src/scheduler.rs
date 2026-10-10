@@ -64,6 +64,14 @@ impl Scheduler {
                 .arg(&script)
                 .spawn();
         }
+
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("notify-send")
+                .arg(title)
+                .arg(message)
+                .spawn();
+        }
     }
 
     pub async fn run_loop(&self, dry_run: bool) -> Result<()> {
