@@ -1,4 +1,4 @@
-# <img src="assets/logo.png" width="36" height="36" align="center" alt="ai-limit-ping logo" /> ai-limit-ping (`alp`)
+# <img src="assets/logo.png" width="32" height="32" align="absmiddle" alt="ai-limit-ping logo" /> ai-limit-ping (`alp`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
