@@ -4,10 +4,14 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 ![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)
 
-A high-efficiency, near-0% CPU and RAM background daemon and CLI that keeps **Codex**, **Antigravity (`agy`)**, and **Claude Code** 5-hour rate limit windows alive.
+A high-efficiency, near-0% CPU and RAM background daemon and CLI that perpetually claims **Codex**, **Antigravity (`agy`)**, and **Claude Code** 5-hour rate limit windows in the background.
 
-Whenever a 5-hour quota window resets, `alp` sends a tiny synthetic request through the official provider CLI to restart the 5-hour window immediately, preventing your quota cycle from drifting.
+Many AI subscriptions, especially at lower tiers, don't run on fixed global reset schedules; their 5-hour countdown **only starts ticking when you send a prompt**. `alp` continuously claims new windows by sending a tiny synthetic ping the moment each window expires, so whenever you sit down to code, you step into an already-active window and are statistically far closer to your next quota replenishment rather than facing a full 5 hour lockout.
 
+### Why `alp`?
+
+- **Without `alp`**: Starting a session after being idle starts your 5 hour clock from zero. If you burn through your quota during a coding sprint, you're stuck waiting the full 5 hours for the next reset.
+- **With `alp`**: Windows are claimed around the clock. When you sit down to work, an active window is already ticking; meaning your next quota replenishment is statistically much closer :) .
 ---
 
 ## Highlights
