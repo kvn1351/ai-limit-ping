@@ -4,9 +4,9 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 ![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)
 
-A high-efficiency, near-0% CPU and RAM background daemon and CLI that perpetually claims **Codex**, **Antigravity (`agy`)**, and **Claude Code** 5-hour rate limit windows in the background.
+A high-efficiency, near-0% CPU and RAM background daemon and CLI that perpetually claims **Codex**, **Antigravity**, and **Claude Code** 5-hour rate limit windows in the background.
 
-Many AI subscriptions, especially at lower tiers, don't run on fixed global reset schedules; their 5-hour countdown **only starts ticking when you send a prompt**. `alp` continuously claims new windows by sending a tiny synthetic ping the moment each window expires, so whenever you sit down to code, you step into an already-active window and are statistically far closer to your next quota replenishment rather than facing a full 5 hour lockout.
+Many AI subscriptions, especially at lower tiers, don't run on fixed global reset schedules; their 5-hour countdown **only starts ticking when you send a prompt**. `alp` continuously claims new windows by sending a tiny prompt via the official harness CLI tools the moment each window expires, so whenever you sit down to code, you step into an already active window and are statistically far closer to your next quota replenishment rather than facing a full 5-hour lockout.
 
 ### Why `alp`?
 
@@ -31,11 +31,14 @@ Many AI subscriptions, especially at lower tiers, don't run on fixed global rese
 
 ## Supported Providers
 
-| Provider | Read 5h Limit (0 Quota) | Headless Ephemeral Ping | Auth Source |
-|---|---|---|---|
-| **Codex** | Direct GET `/wham/usage` | `codex exec --ephemeral --sandbox read-only` | `~/.codex/auth.json` (auto-refreshed via OpenAI OAuth) |
-| **Antigravity (`agy`)** | Zero-turn CLI: `agy -p "/usage"` | `agy -p "hello" --output-format json --effort low` | `~/.gemini/antigravity-cli/antigravity-oauth-token` |
-| **Claude Code** | Direct GET `/api/oauth/usage` | `claude -p "ok" --no-session-persistence --tools ""` | macOS Keychain (`Claude Code-credentials`) or `~/.claude/.credentials.json` |
+> [!IMPORTANT]
+> **Prerequisites:** The official CLI harness (`codex`, `agy`, or `claude`) for any provider you wish to use must be installed and logged in on your system. `alp` dispatches prompt requests through these official harnesses, so you only need the CLI tools installed for the providers you want to keep active.
+
+| Provider | CLI Tool | Read 5h Limit (0 Quota) | Headless Ephemeral Ping | Auth Source |
+|---|---|---|---|---|
+| **Codex** | `codex` | Direct GET `/wham/usage` | `codex exec --ephemeral --sandbox read-only` | `~/.codex/auth.json` (auto-refreshed via OpenAI OAuth) |
+| **Antigravity (`agy`)** | `agy` | Zero-turn CLI: `agy -p "/usage"` | `agy -p "hello" --output-format json --effort low` | `~/.gemini/antigravity-cli/antigravity-oauth-token` |
+| **Claude Code** | `claude` | Direct GET `/api/oauth/usage` | `claude -p "ok" --no-session-persistence --tools ""` | macOS Keychain (`Claude Code-credentials`) or `~/.claude/.credentials.json` |
 
 ---
 
