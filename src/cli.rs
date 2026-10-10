@@ -396,8 +396,11 @@ async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
         }
 
         if let Some(last_check) = prov_state.last_checked_at {
-            let age_sec = (now - last_check).num_seconds();
-            println!("  Last Verified:   {}s ago (locally cached)", age_sec);
+            let age_sec = (now - last_check).num_seconds().max(0);
+            let h = age_sec / 3600;
+            let m = (age_sec % 3600) / 60;
+            let s = age_sec % 60;
+            println!("  Last Verified:   {:02}h {:02}m {:02}s ago (locally cached)", h, m, s);
         }
 
         if let Some(last_ping) = prov_state.last_ping_at {
