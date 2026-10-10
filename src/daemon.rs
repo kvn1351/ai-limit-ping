@@ -8,6 +8,13 @@ use std::process::Command;
 const SERVICE_NAME: &str = "ai-limit-ping";
 const MACOS_LABEL: &str = "com.user.ai-limit-ping";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonState {
+    Active,
+    Stopped,
+    NotInstalled,
+}
+
 pub struct DaemonManager;
 
 impl DaemonManager {
@@ -197,6 +204,93 @@ WantedBy=default.target
         Ok(())
     }
 
+    pub fn state() -> DaemonState {
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(out) = Command::new("launchctl").args(["list"]).output() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = text.lines().find(|l| l.contains(MACOS_LABEL)) {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if let Some(pid_str) = parts.first() {
+                        if let Ok(pid) = pid_str.parse::<i32>() {
+                            if pid > 0 {
+                                return DaemonState::Active;
+                            }
+                        }
+                    }
+                    return DaemonState::Stopped;
+                }
+            }
+            if Self::launchd_plist_path().exists() {
+                DaemonState::Stopped
+            } else {
+                DaemonState::NotInstalled
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(out) = Command::new("schtasks")
+                .args(["/query", "/tn", "AILimitPingDaemon", "/fo", "csv", "/nh"])
+                .output()
+            {
+                if out.status.success() {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    if text.to_lowercase().contains("running") {
+                        DaemonState::Active
+                    } else {
+                        DaemonState::Stopped
+                    }
+                } else {
+                    DaemonState::NotInstalled
+                }
+            } else {
+                DaemonState::NotInstalled
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(out) = Command::new("systemctl")
+                .args(["--user", "is-active", &format!("{}.service", SERVICE_NAME)])
+                .output()
+            {
+                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if text == "active" {
+                    DaemonState::Active
+                } else if Self::systemd_unit_path().exists() {
+                    DaemonState::Stopped
+                } else {
+                    DaemonState::NotInstalled
+                }
+            } else if Self::systemd_unit_path().exists() {
+                DaemonState::Stopped
+            } else {
+                DaemonState::NotInstalled
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            DaemonState::NotInstalled
+        }
+    }
+
+    pub fn status_line() -> String {
+        let backend = if cfg!(target_os = "macos") {
+            "(launchd)"
+        } else if cfg!(target_os = "windows") {
+            "(Task Scheduler)"
+        } else {
+            "(systemd)"
+        };
+        match Self::state() {
+            DaemonState::Active => format!("Daemon: {} {}", "active".green(), backend.dimmed()),
+            DaemonState::Stopped => format!("Daemon: {} {}", "stopped".yellow(), backend.dimmed()),
+            DaemonState::NotInstalled => format!("Daemon: {}", "not installed".dimmed()),
+        }
+    }
+
     pub fn uninstall() -> Result<()> {
         #[cfg(target_os = "macos")]
         {
@@ -208,6 +302,9 @@ WantedBy=default.target
                 fs::remove_file(&plist_path)?;
                 println!("{} Uninstalled launchd daemon plist", "✓".green());
             } else {
+                let _ = Command::new("launchctl")
+                    .args(["remove", MACOS_LABEL])
+                    .output();
                 println!("No daemon plist found at {}", plist_path.display());
             }
         }
@@ -240,11 +337,19 @@ WantedBy=default.target
     pub fn start() -> Result<()> {
         #[cfg(target_os = "macos")]
         {
-            let status = Command::new("launchctl")
-                .args(["start", MACOS_LABEL])
-                .status()?;
-            if status.success() {
-                println!("{} Started daemon {}", "✓".green(), MACOS_LABEL);
+            let plist_path = Self::launchd_plist_path();
+            if plist_path.exists() {
+                let _ = Command::new("launchctl")
+                    .args(["load", plist_path.to_str().unwrap()])
+                    .status();
+                let status = Command::new("launchctl")
+                    .args(["start", MACOS_LABEL])
+                    .status()?;
+                if status.success() {
+                    println!("{} Started daemon {}", "✓".green(), MACOS_LABEL);
+                }
+            } else {
+                return Err(anyhow!("Daemon plist not found at {}. Run `alp daemon install` first.", plist_path.display()));
             }
         }
 
@@ -272,12 +377,17 @@ WantedBy=default.target
     pub fn stop() -> Result<()> {
         #[cfg(target_os = "macos")]
         {
-            let status = Command::new("launchctl")
-                .args(["stop", MACOS_LABEL])
-                .status()?;
-            if status.success() {
-                println!("{} Stopped daemon {}", "✓".green(), MACOS_LABEL);
+            let plist_path = Self::launchd_plist_path();
+            if plist_path.exists() {
+                let _ = Command::new("launchctl")
+                    .args(["unload", plist_path.to_str().unwrap()])
+                    .status();
+            } else {
+                let _ = Command::new("launchctl")
+                    .args(["stop", MACOS_LABEL])
+                    .status();
             }
+            println!("{} Stopped daemon {}", "✓".green(), MACOS_LABEL);
         }
 
         #[cfg(target_os = "windows")]
@@ -304,37 +414,60 @@ WantedBy=default.target
     pub fn status() -> Result<()> {
         #[cfg(target_os = "macos")]
         {
-            let out = Command::new("launchctl")
-                .args(["list"])
-                .output()?;
-            let text = String::from_utf8_lossy(&out.stdout);
-            if let Some(line) = text.lines().find(|l| l.contains(MACOS_LABEL)) {
-                println!("{} Daemon is registered in launchd:\n{}", "✓".green().bold(), line);
-            } else {
-                println!("{} Daemon is not registered in launchd. Run `alp daemon install`.", "!".yellow());
+            match Self::state() {
+                DaemonState::Active => {
+                    let out = Command::new("launchctl")
+                        .args(["list"])
+                        .output()?;
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let line = text.lines().find(|l| l.contains(MACOS_LABEL)).unwrap_or("");
+                    println!("{} Daemon is registered and active in launchd:\n{}", "✓".green().bold(), line);
+                }
+                DaemonState::Stopped => {
+                    println!("{} Daemon plist is installed but service is stopped. Run `alp daemon start`.", "!".yellow());
+                }
+                DaemonState::NotInstalled => {
+                    println!("{} Daemon is not registered in launchd. Run `alp daemon install`.", "!".yellow());
+                }
             }
         }
 
         #[cfg(target_os = "windows")]
         {
-            let out = Command::new("schtasks")
-                .args(["/query", "/tn", "AILimitPingDaemon"])
-                .output()?;
-            if out.status.success() {
-                println!("{} Daemon task is registered:\n{}", "✓".green().bold(), String::from_utf8_lossy(&out.stdout));
-            } else {
-                println!("{} Daemon task is not registered. Run `alp daemon install`.", "!".yellow());
+            match Self::state() {
+                DaemonState::Active => {
+                    let out = Command::new("schtasks")
+                        .args(["/query", "/tn", "AILimitPingDaemon"])
+                        .output()?;
+                    println!("{} Daemon task is active:\n{}", "✓".green().bold(), String::from_utf8_lossy(&out.stdout));
+                }
+                DaemonState::Stopped => {
+                    println!("{} Daemon task is registered but stopped. Run `alp daemon start`.", "!".yellow());
+                }
+                DaemonState::NotInstalled => {
+                    println!("{} Daemon task is not registered. Run `alp daemon install`.", "!".yellow());
+                }
             }
         }
 
         #[cfg(target_os = "linux")]
         {
-            let status = Command::new("systemctl")
-                .args(["--user", "status", &format!("{}.service", SERVICE_NAME)])
-                .status()?;
-            if !status.success() {
-                println!("{} Daemon service is not active. Run `alp daemon install`.", "!".yellow());
+            match Self::state() {
+                DaemonState::Active => {
+                    println!("{} Daemon service is active and running in systemd.", "✓".green().bold());
+                }
+                DaemonState::Stopped => {
+                    println!("{} Daemon service is installed but stopped. Run `alp daemon start`.", "!".yellow());
+                }
+                DaemonState::NotInstalled => {
+                    println!("{} Daemon service is not installed. Run `alp daemon install`.", "!".yellow());
+                }
             }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            println!("{}", "Daemon management is not supported on this platform.".yellow());
         }
 
         Ok(())

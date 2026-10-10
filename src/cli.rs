@@ -137,16 +137,13 @@ pub async fn run_cli() -> Result<()> {
 
     result
 }
-
 fn print_titlecard(_state: &AppState) {
-    let line1_right = format!("{} {}", "AI Limit Ping".bold(), "0.1.0 (alp)".dimmed());
-    let daemon_status = if cfg!(target_os = "macos") {
-        format!("Daemon: {} {}", "active".green(), "(launchd)".dimmed())
-    } else if cfg!(target_os = "windows") {
-        format!("Daemon: {} {}", "active".green(), "(Task Scheduler)".dimmed())
-    } else {
-        format!("Daemon: {} {}", "active".green(), "(systemd)".dimmed())
-    };
+    let line1_right = format!(
+        "{} {}",
+        "AI Limit Ping".bold(),
+        format!("{} (alp)", env!("CARGO_PKG_VERSION")).dimmed()
+    );
+    let daemon_status = DaemonManager::status_line();
 
     let fg_c = |r: u8, g: u8, b: u8| format!("\x1b[38;2;{};{};{}m", r, g, b);
     let bg_c = |r: u8, g: u8, b: u8| format!("\x1b[48;2;{};{};{}m", r, g, b);

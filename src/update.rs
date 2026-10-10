@@ -245,8 +245,10 @@ pub async fn handle_update() -> Result<()> {
     let _ = state.save();
 
     // Restart background daemon if active
-    let _ = DaemonManager::stop();
-    let _ = DaemonManager::start();
+    if DaemonManager::state() == crate::daemon::DaemonState::Active {
+        let _ = DaemonManager::stop();
+        let _ = DaemonManager::start();
+    }
 
     println!("\n{} Successfully updated alp to v{}!", "✓".green().bold(), latest_ver);
     Ok(())
