@@ -94,6 +94,36 @@ alp daemon uninstall
 > - **Windows**: Managed via Task Scheduler task `AILimitPingDaemon`.
 > - **Logs**: Written to `~/.local/share/ai-limit-ping/daemon.stdout.log`.
 
+### 3. Uninstall & Complete Removal
+
+- **Remove the background daemon only:**
+  ```bash
+  alp daemon uninstall
+  ```
+  *(Unregisters the background service, preserving your CLI binary, config file, and logs).*
+
+- **Full clean removal (binary, config & logs):**
+  - **macOS:**
+    ```bash
+    alp daemon uninstall
+    rm -f ~/.local/bin/alp
+    rm -rf ~/.local/share/ai-limit-ping
+    rm -rf ~/Library/Application\ Support/ai-limit-ping
+    ```
+  - **Linux:**
+    ```bash
+    alp daemon uninstall
+    rm -f ~/.local/bin/alp
+    rm -rf ~/.local/share/ai-limit-ping
+    rm -rf ~/.config/ai-limit-ping
+    ```
+  - **Windows (PowerShell):**
+    ```powershell
+    alp daemon uninstall
+    Remove-Item -Force "$HOME\.local\bin\alp.exe"
+    Remove-Item -Recurse -Force "$env:APPDATA\ai-limit-ping", "$env:LOCALAPPDATA\ai-limit-ping"
+    ```
+
 ---
 
 ## CLI Commands
