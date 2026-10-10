@@ -185,6 +185,21 @@ async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
             } else {
                 "ACTIVE".green().bold().to_string()
             }
+        } else if let Some(reset) = prov_state.window_resets_at {
+            if reset > now {
+                let diff = (reset - now).num_seconds();
+                let m = (diff % 3600) / 60;
+                let s = diff % 60;
+                format!(
+                    "{} (backoff for {:02}m {:02}s until {})",
+                    "BACKOFF".yellow().bold(),
+                    m,
+                    s,
+                    reset.with_timezone(&chrono::Local).format("%H:%M:%S")
+                )
+            } else {
+                "WINDOW FREE (Ready for ping)".cyan().bold().to_string()
+            }
         } else {
             "WINDOW FREE (Ready for ping)".cyan().bold().to_string()
         };
@@ -210,6 +225,12 @@ async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
                 "  Last Ping:       {}",
                 last_ping.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S")
             );
+        }
+
+        if let Some(status) = &prov_state.last_ping_status {
+            if status.starts_with("Failed") {
+                println!("  Last Error:      {}", status.dimmed());
+            }
         }
     }
 

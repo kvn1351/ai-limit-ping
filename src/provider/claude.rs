@@ -239,7 +239,9 @@ impl Provider for ClaudeProvider {
             });
         }
 
+        let sandbox = super::get_sandbox_dir();
         let output = Command::new(&bin)
+            .current_dir(&sandbox)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

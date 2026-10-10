@@ -45,6 +45,8 @@ impl DaemonManager {
         <string>{bin}</string>
         <string>watch</string>
     </array>
+    <key>WorkingDirectory</key>
+    <string>{workdir}</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -58,6 +60,7 @@ impl DaemonManager {
 "#,
             label = MACOS_LABEL,
             bin = bin_path.display(),
+            workdir = log_dir.display(),
             stdout = stdout_log.display(),
             stderr = stderr_log.display()
         )
@@ -73,6 +76,11 @@ impl DaemonManager {
 
     #[cfg(target_os = "linux")]
     fn generate_systemd_unit(bin_path: &PathBuf) -> String {
+        let work_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".local/share/ai-limit-ping");
+        let _ = fs::create_dir_all(&work_dir);
+
         format!(
             r#"[Unit]
 Description=AI Limit Ping Daemon (alp)
@@ -81,6 +89,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+WorkingDirectory={workdir}
 ExecStart={bin} watch
 Restart=always
 RestartSec=10
@@ -88,7 +97,8 @@ RestartSec=10
 [Install]
 WantedBy=default.target
 "#,
-            bin = bin_path.display()
+            bin = bin_path.display(),
+            workdir = work_dir.display()
         )
     }
 

@@ -89,7 +89,9 @@ impl Provider for AntigravityProvider {
 
     async fn fetch_usage(&self) -> Result<UsageSnapshot> {
         let bin = Self::resolve_agy_binary();
+        let sandbox = super::get_sandbox_dir();
         let output = Command::new(&bin)
+            .current_dir(&sandbox)
             .args(["-p", "/usage", "--output-format", "json", "--print-timeout", "30s"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -221,7 +223,9 @@ impl Provider for AntigravityProvider {
             });
         }
 
+        let sandbox = super::get_sandbox_dir();
         let output = Command::new(&bin)
+            .current_dir(&sandbox)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

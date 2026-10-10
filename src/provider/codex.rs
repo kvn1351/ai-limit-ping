@@ -339,7 +339,9 @@ impl Provider for CodexProvider {
             });
         }
 
+        let sandbox = super::get_sandbox_dir();
         let output = Command::new("codex")
+            .current_dir(&sandbox)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

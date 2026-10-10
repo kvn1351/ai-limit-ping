@@ -58,7 +58,19 @@ impl ProviderState {
                 let due_time = reset + chrono::Duration::seconds(buffer_seconds as i64);
                 Utc::now() >= due_time
             }
-            None => true,
+            None => {
+                // If reset time is not available from API (e.g. Claude Code CLI fallback),
+                // rely on last_ping_at to ensure we only ping once per 5 hours!
+                match self.last_ping_at {
+                    Some(last_ping) => {
+                        let next_due = last_ping
+                            + chrono::Duration::hours(5)
+                            + chrono::Duration::seconds(buffer_seconds as i64);
+                        Utc::now() >= next_due
+                    }
+                    None => true,
+                }
+            }
         }
     }
 }

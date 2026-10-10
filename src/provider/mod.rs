@@ -47,6 +47,15 @@ pub trait Provider: Send + Sync {
     async fn is_active_task_running(&self) -> Result<bool>;
 }
 
+/// Returns an isolated scratch directory for synthetic pings so subprocesses don't scan user files/folders
+pub fn get_sandbox_dir() -> std::path::PathBuf {
+    let p = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".local/share/ai-limit-ping/sandbox");
+    let _ = std::fs::create_dir_all(&p);
+    p
+}
+
 /// Cross-platform helper to check if a binary exists in PATH or user local bin directory
 pub fn is_binary_available(name: &str) -> bool {
     let path = std::path::Path::new(name);

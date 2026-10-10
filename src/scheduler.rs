@@ -179,6 +179,10 @@ impl Scheduler {
                             );
                             prov_state.last_ping_at = Some(Utc::now());
                             prov_state.last_ping_status = Some(res.message.clone());
+                            if prov_state.window_resets_at.is_none() {
+                                prov_state.window_resets_at = Some(Utc::now() + chrono::Duration::hours(5));
+                                prov_state.is_active = true;
+                            }
                             state.set_provider(prov_state.clone());
                             let _ = state.save();
 
@@ -192,7 +196,7 @@ impl Scheduler {
                                 sleep(Duration::from_secs(12)).await;
                                 if let Ok(new_usage) = provider.fetch_usage().await {
                                     prov_state.is_active = new_usage.is_active;
-                                    prov_state.window_resets_at = new_usage.resets_at;
+                                    prov_state.window_resets_at = new_usage.resets_at.or(Some(Utc::now() + chrono::Duration::hours(5)));
                                     prov_state.used_percent = new_usage.used_percent;
                                     prov_state.last_checked_at = Some(Utc::now());
                                     state.set_provider(prov_state.clone());
@@ -202,7 +206,11 @@ impl Scheduler {
                         }
                         Err(e) => {
                             error!("[{}] Ping failed: {}", id, e);
+                            prov_state.last_ping_at = Some(Utc::now());
                             prov_state.last_ping_status = Some(format!("Failed: {}", e));
+                            if prov_state.window_resets_at.is_none() {
+                                prov_state.window_resets_at = Some(Utc::now() + chrono::Duration::minutes(15));
+                            }
                             state.set_provider(prov_state.clone());
                             let _ = state.save();
                         }
