@@ -1,6 +1,6 @@
 [package]
 name = "ai-limit-ping"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["Kevin Johansson <kevin_1351@hotmail.com>"]
 description = "Near 0% CPU & RAM background daemon and CLI that keeps 5-hour rate limit windows alive for Codex, Antigravity, and Claude Code"
