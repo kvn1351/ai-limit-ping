@@ -79,6 +79,10 @@ impl ProviderState {
 pub struct AppState {
     pub providers: BTreeMap<String, ProviderState>,
     pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub last_update_check: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub latest_known_version: Option<String>,
 }
 
 impl AppState {

@@ -37,17 +37,28 @@ Whenever a 5-hour quota window resets, `alp` sends a tiny synthetic request thro
 
 ## Installation & Setup
 
-### 1. Build & Install Binary
+### 1. Install `alp`
+
+**One-line installer (macOS & Linux):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/kvn1351/ai-limit-ping/main/install.sh | sh
+```
+
+**One-line installer (Windows PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/kvn1351/ai-limit-ping/main/install.ps1 | iex
+```
+
+<details>
+<summary>Or build from source via Cargo</summary>
 
 ```bash
-# Clone and build
 git clone https://github.com/kvn1351/ai-limit-ping.git
 cd ai-limit-ping
 cargo build --release
-
-# Copy to your PATH (e.g. ~/.local/bin or /usr/local/bin)
 cp target/release/alp ~/.local/bin/
 ```
+</details>
 
 ### 2. Enable Background Daemon
 
@@ -97,6 +108,9 @@ alp ping all
 
 # Run foreground watcher with live countdowns
 alp watch
+
+# Update alp to the latest release from GitHub
+alp update
 ```
 
 ---

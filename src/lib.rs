@@ -5,5 +5,6 @@ pub mod network;
 pub mod provider;
 pub mod scheduler;
 pub mod state;
+pub mod update;
 
 pub use cli::run_cli;

@@ -59,6 +59,9 @@ pub enum Commands {
         #[arg(default_value = "show")]
         action: String,
     },
+
+    /// Update alp to the latest version from GitHub
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -79,41 +82,60 @@ pub async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     let config = Config::load_or_default();
 
-    match cli.command.unwrap_or(Commands::Status { refresh: false }) {
-        Commands::Status { refresh } => {
-            handle_status(&config, refresh).await?;
-        }
-        Commands::Ping { provider, dry_run } => {
-            handle_ping(&config, &provider, dry_run).await?;
-        }
+    let is_daemon_or_watch = matches!(
+        cli.command,
+        Some(Commands::Watch { .. }) | Some(Commands::Daemon { .. })
+    );
+
+    // If it's a CLI command, check for updates concurrently in background
+    let update_task = if !is_daemon_or_watch && !matches!(cli.command, Some(Commands::Update)) {
+        Some(tokio::spawn(crate::update::check_for_updates()))
+    } else {
+        None
+    };
+
+    let result = match cli.command.unwrap_or(Commands::Status { refresh: false }) {
+        Commands::Status { refresh } => handle_status(&config, refresh).await,
+        Commands::Ping { provider, dry_run } => handle_ping(&config, &provider, dry_run).await,
         Commands::Watch { dry_run } => {
             let scheduler = Scheduler::new(config);
-            scheduler.run_loop(dry_run).await?;
+            scheduler.run_loop(dry_run).await
         }
         Commands::Daemon { action } => match action {
-            DaemonAction::Install => DaemonManager::install()?,
-            DaemonAction::Uninstall => DaemonManager::uninstall()?,
-            DaemonAction::Start => DaemonManager::start()?,
-            DaemonAction::Stop => DaemonManager::stop()?,
-            DaemonAction::Status => DaemonManager::status()?,
+            DaemonAction::Install => DaemonManager::install(),
+            DaemonAction::Uninstall => DaemonManager::uninstall(),
+            DaemonAction::Start => DaemonManager::start(),
+            DaemonAction::Stop => DaemonManager::stop(),
+            DaemonAction::Status => DaemonManager::status(),
         },
-        Commands::Config { action } => match action.as_str() {
-            "show" => {
-                let content = serde_json::to_string_pretty(&config)?;
-                println!("Config path: {}\n", Config::config_path().display());
-                println!("{}", content);
+        Commands::Config { action } => {
+            match action.as_str() {
+                "show" => {
+                    let content = serde_json::to_string_pretty(&config)?;
+                    println!("Config path: {}\n", Config::config_path().display());
+                    println!("{}", content);
+                }
+                "init" => {
+                    config.save()?;
+                    println!("{} Saved default config to {}", "✓".green(), Config::config_path().display());
+                }
+                _ => {
+                    println!("Unknown config action: {}. Use 'show' or 'init'.", action);
+                }
             }
-            "init" => {
-                config.save()?;
-                println!("{} Saved default config to {}", "✓".green(), Config::config_path().display());
-            }
-            _ => {
-                println!("Unknown config action: {}. Use 'show' or 'init'.", action);
-            }
-        },
+            Ok(())
+        }
+        Commands::Update => crate::update::handle_update().await,
+    };
+
+    // If an update is available, print the notice
+    if let Some(task) = update_task {
+        if let Ok(Some(latest_ver)) = task.await {
+            crate::update::print_update_notice(&latest_ver);
+        }
     }
 
-    Ok(())
+    result
 }
 
 fn print_titlecard(_state: &AppState) {
