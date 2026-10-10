@@ -11,9 +11,6 @@ repository = "https://github.com/kvn1351/ai-limit-ping"
 name = "ai_limit_ping"
 path = "src/lib.rs"
 
-[[bin]]
-name = "ai-limit-ping"
-path = "src/bin/ai-limit-ping.rs"
 
 [[bin]]
 name = "alp"

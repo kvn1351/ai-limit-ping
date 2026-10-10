@@ -116,10 +116,171 @@ pub async fn run_cli() -> Result<()> {
     Ok(())
 }
 
-async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
-    println!("{}", "=== AI Limit Window Status ===".bold());
+fn print_titlecard(_state: &AppState) {
+    let line1_right = format!("{} {}", "AI Limit Ping".bold(), "0.1.0 (alp)".dimmed());
+    let daemon_status = if cfg!(target_os = "macos") {
+        format!("Daemon: {} {}", "active".green(), "(launchd)".dimmed())
+    } else if cfg!(target_os = "windows") {
+        format!("Daemon: {} {}", "active".green(), "(Task Scheduler)".dimmed())
+    } else {
+        format!("Daemon: {} {}", "active".green(), "(systemd)".dimmed())
+    };
 
+    let fg_c = |r: u8, g: u8, b: u8| format!("\x1b[38;2;{};{};{}m", r, g, b);
+    let bg_c = |r: u8, g: u8, b: u8| format!("\x1b[48;2;{};{};{}m", r, g, b);
+    let rst = "\x1b[0m";
+
+    // Wooden Hourglass with Golden Sand (Wide Plinth design):
+    // 10 columns x 10 rows (5 terminal lines)
+    let mut grid: [[Option<(u8, u8, u8)>; 10]; 10] = [[None; 10]; 10];
+
+    // Row 0: Top cap (0..10)
+    for x in 0..10 {
+        let t = (x as f32 - 4.5).abs() / 4.5;
+        grid[0][x] = Some((
+            (220.0 - 70.0 * t) as u8,
+            (150.0 - 60.0 * t) as u8,
+            (75.0 - 35.0 * t) as u8,
+        ));
+    }
+    // Row 1: Top wood trim (1..9)
+    for x in 1..9 {
+        let t = (x as f32 - 4.5).abs() / 3.5;
+        grid[1][x] = Some((
+            (180.0 - 55.0 * t) as u8,
+            (115.0 - 45.0 * t) as u8,
+            (55.0 - 28.0 * t) as u8,
+        ));
+    }
+
+    // Upper glass bulb:
+    // Row 2: x=1 to 8:
+    grid[2][1] = Some((200, 230, 245)); // glass highlight
+    for x in 2..8 {
+        let t = (x as f32 - 4.5).abs() / 2.5;
+        grid[2][x] = Some((
+            (255.0 - 20.0 * t) as u8,
+            (215.0 - 35.0 * t) as u8,
+            (75.0 - 25.0 * t) as u8,
+        ));
+    }
+    grid[2][8] = Some((130, 175, 200));
+
+    // Row 3: x=2 to 7:
+    grid[3][2] = Some((210, 235, 250));
+    for x in 3..7 {
+        let t = (x as f32 - 4.5).abs() / 1.5;
+        grid[3][x] = Some((
+            (255.0 - 25.0 * t) as u8,
+            (225.0 - 40.0 * t) as u8,
+            (85.0 - 30.0 * t) as u8,
+        ));
+    }
+    grid[3][7] = Some((130, 175, 200));
+
+    // Row 4: Neck (x=3 to 6)
+    grid[4][3] = Some((190, 225, 245));
+    grid[4][4] = Some((255, 245, 140)); // bright trickling sand
+    grid[4][5] = Some((250, 210, 70));
+    grid[4][6] = Some((120, 165, 190));
+
+    // Row 5: Neck lower (x=3 to 6):
+    grid[5][3] = Some((190, 225, 245));
+    grid[5][4] = Some((255, 245, 140));
+    grid[5][5] = Some((250, 210, 70));
+    grid[5][6] = Some((120, 165, 190));
+
+    // Row 6: Lower glass opening (x=2 to 7):
+    grid[6][2] = Some((210, 235, 250));
+    // empty air cavity at x=3
+    grid[6][4] = Some((255, 240, 120)); // sand landing peak
+    grid[6][5] = Some((245, 195, 60));
+    // empty air cavity at x=6
+    grid[6][7] = Some((130, 175, 200));
+
+    // Row 7: Lower glass sand mound (x=1 to 8):
+    grid[7][1] = Some((200, 230, 245));
+    for x in 2..8 {
+        let t = (x as f32 - 4.5).abs() / 2.5;
+        grid[7][x] = Some((
+            (250.0 - 35.0 * t) as u8,
+            (205.0 - 50.0 * t) as u8,
+            (70.0 - 25.0 * t) as u8,
+        ));
+    }
+    grid[7][8] = Some((130, 175, 200));
+
+    // Row 8: Bottom wood trim (1..9)
+    for x in 1..9 {
+        let t = (x as f32 - 4.5).abs() / 3.5;
+        grid[8][x] = Some((
+            (180.0 - 55.0 * t) as u8,
+            (115.0 - 45.0 * t) as u8,
+            (55.0 - 28.0 * t) as u8,
+        ));
+    }
+    // Row 9: Bottom wood base (0..10)
+    for x in 0..10 {
+        let t = (x as f32 - 4.5).abs() / 4.5;
+        grid[9][x] = Some((
+            (220.0 - 70.0 * t) as u8,
+            (150.0 - 60.0 * t) as u8,
+            (75.0 - 35.0 * t) as u8,
+        ));
+    }
+
+    let mut logo = Vec::with_capacity(5);
+    for line_idx in 0..5 {
+        let y_top = line_idx * 2;
+        let y_bot = line_idx * 2 + 1;
+        let row_t = &grid[y_top];
+        let row_b = &grid[y_bot];
+
+        let mut row_str = String::with_capacity(10 * 25);
+        for x in 0..10 {
+            let ct = row_t[x];
+            let cb = row_b[x];
+            match (ct, cb) {
+                (Some((rt, gt, bt)), Some((rb, gb, bb))) => {
+                    row_str.push_str(&format!("{}{}\u{2580}{}", fg_c(rt, gt, bt), bg_c(rb, gb, bb), rst));
+                }
+                (Some((rt, gt, bt)), None) => {
+                    row_str.push_str(&format!("{}\u{2580}{}", fg_c(rt, gt, bt), rst));
+                }
+                (None, Some((rb, gb, bb))) => {
+                    row_str.push_str(&format!("{}\u{2584}{}", fg_c(rb, gb, bb), rst));
+                }
+                (None, None) => {
+                    row_str.push(' ');
+                }
+            }
+        }
+        logo.push(row_str);
+    }
+
+    // Centered vertically relative to the 5 logo lines (lines 1 and 2)
+    let info = [
+        "",
+        &line1_right,
+        &daemon_status,
+        "",
+        "",
+    ];
+
+    println!();
+    for (l, i) in logo.iter().zip(info.iter()) {
+        if i.is_empty() {
+            println!("{}", l);
+        } else {
+            println!("{}    {}", l, i);
+        }
+    }
+    println!();
+}
+
+async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
     let mut state = AppState::load();
+    print_titlecard(&state);
     let providers: Vec<Arc<dyn Provider>> = vec![
         Arc::new(CodexProvider::new(config.codex_model.clone())),
         Arc::new(AntigravityProvider::new(config.antigravity_model.clone())),
