@@ -35,9 +35,9 @@ Whenever a 5-hour quota window resets, `alp` sends a tiny synthetic request thro
 
 ---
 
-## Quick Start
+## Installation & Setup
 
-### Build & Install
+### 1. Build & Install Binary
 
 ```bash
 # Clone and build
@@ -49,7 +49,36 @@ cargo build --release
 cp target/release/alp ~/.local/bin/
 ```
 
-### CLI Commands
+### 2. Enable Background Daemon
+
+`alp` runs unattended in the background across reboots using your operating system's native service manager (macOS `launchd`, Linux `systemd --user`, or Windows Task Scheduler).
+
+The commands are identical on all platforms:
+
+```bash
+# Install and start background daemon
+alp daemon install
+
+# Check daemon service status
+alp daemon status
+
+# Start / Stop service
+alp daemon start
+alp daemon stop
+
+# Uninstall daemon service
+alp daemon uninstall
+```
+
+> **Platform Details:**
+> - **macOS**: Managed via `launchd` user agent (`~/Library/LaunchAgents/com.user.ai-limit-ping.plist`).
+> - **Linux**: Managed via `systemd --user` (`~/.config/systemd/user/ai-limit-ping.service`, no root/sudo needed). On headless servers, run `loginctl enable-linger $USER` to persist across SSH disconnects.
+> - **Windows**: Managed via Task Scheduler task `AILimitPingDaemon`.
+> - **Logs**: Written to `~/.local/share/ai-limit-ping/daemon.stdout.log`.
+
+---
+
+## CLI Commands
 
 ```bash
 # Show current limits and countdowns (from local fast cache)
@@ -68,58 +97,6 @@ alp ping all
 
 # Run foreground watcher with live countdowns
 alp watch
-```
-
----
-
-## Background Daemon
-
-You can run `alp` as an unattended background service managed directly by your operating system:
-
-### macOS (`launchd`)
-
-```bash
-# Install and register as a macOS launchd user agent
-alp daemon install
-
-# Check daemon service status
-alp daemon status
-
-# Start / Stop service
-alp daemon start
-alp daemon stop
-
-# Uninstall launchd service
-alp daemon uninstall
-```
-
-Logs are saved to `~/.local/share/ai-limit-ping/daemon.stdout.log`.
-
-### Linux (`systemd --user`)
-
-```bash
-# Install and enable as a systemd user service (no sudo required)
-alp daemon install
-
-# Check service status
-alp daemon status
-
-# Start / Stop service
-alp daemon start
-alp daemon stop
-
-# Uninstall service
-alp daemon uninstall
-```
-
-> **Tip for headless servers/VPS:** Run `loginctl enable-linger $USER` if you want the user service to continue running after SSH logout.
-
-### Windows (Task Scheduler)
-
-```cmd
-alp daemon install
-alp daemon status
-alp daemon uninstall
 ```
 
 ---
