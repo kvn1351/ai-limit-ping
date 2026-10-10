@@ -95,6 +95,25 @@ alp daemon uninstall
 
 Logs are saved to `~/.local/share/ai-limit-ping/daemon.stdout.log`.
 
+### Linux (`systemd --user`)
+
+```bash
+# Install and enable as a systemd user service (no sudo required)
+alp daemon install
+
+# Check service status
+alp daemon status
+
+# Start / Stop service
+alp daemon start
+alp daemon stop
+
+# Uninstall service
+alp daemon uninstall
+```
+
+> **Tip for headless servers/VPS:** Run `loginctl enable-linger $USER` if you want the user service to continue running after SSH logout.
+
 ### Windows (Task Scheduler)
 
 ```cmd
