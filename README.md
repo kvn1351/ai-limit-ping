@@ -20,9 +20,9 @@ Many AI subscriptions, especially at lower tiers, don't run on fixed global rese
 - **Anti-API-Spam Strategy**: Rather than constantly querying endpoints, `alp` caches exact reset timestamps locally (`state.json`). While a window is active, it sleeps until the deadline and **never spams provider APIs**.
 - **Sleep & Wake Resilient**: When your laptop goes to sleep and wakes up past the reset deadline, `alp` immediately detects the clock jump.
 - **Network-Aware**: When resuming from sleep, Wi-Fi can take a few seconds to connect. `alp` waits for network connectivity before attempting queries or pings instead of failing prematurely.
-- **Official Ephemeral Triggers**: Uses official CLI non-interactive modes with sandbox flags, leaving zero conversation clutter in your history:
+- **Official Headless Triggers**: Uses official CLI non-interactive modes with sandbox flags, leaving zero conversation clutter in your history:
   - **Codex**: `codex exec --ephemeral --json --sandbox read-only ...`
-  - **Antigravity**: `agy -p "hello" --output-format json --effort low`
+  - **Antigravity**: `agy -p "ok" --sandbox --output-format json --effort low --model gemini-3.8-flash-low`
   - **Claude Code**: `claude -p "ok" --no-session-persistence --tools ""`
 - **Zero-Configuration Setup**: Works out of the box without any initial configuration. Intelligent defaults are automatically generated on first run.
 - **Zero-Quota Usage Checks**: Reads usage from read-only endpoints without spending any user quota.
@@ -34,10 +34,10 @@ Many AI subscriptions, especially at lower tiers, don't run on fixed global rese
 > [!IMPORTANT]
 > **Prerequisites:** The official CLI harness (`codex`, `agy`, or `claude`) for any provider you wish to use must be installed and logged in on your system. `alp` dispatches prompt requests through these official harnesses, so you only need the CLI tools installed for the providers you want to keep active.
 
-| Provider | CLI Tool | Read 5h Limit (0 Quota) | Headless Ephemeral Ping | Auth Source |
+| Provider | CLI Tool | Read 5h Limit (0 Quota) | Headless Ping | Auth Source |
 |---|---|---|---|---|
 | **Codex** | `codex` | Direct GET `/wham/usage` | `codex exec --ephemeral --sandbox read-only` | `~/.codex/auth.json` (auto-refreshed via OpenAI OAuth) |
-| **Antigravity (`agy`)** | `agy` | Zero-turn CLI: `agy -p "/usage"` | `agy -p "hello" --output-format json --effort low` | `~/.gemini/antigravity-cli/antigravity-oauth-token` |
+| **Antigravity (`agy`)** | `agy` | Zero-turn CLI: `agy -p "/usage"` | `agy -p "ok" --sandbox --output-format json --effort low --model gemini-3.8-flash-low` | `~/.gemini/antigravity-cli/antigravity-oauth-token` |
 | **Claude Code** | `claude` | Direct GET `/api/oauth/usage` | `claude -p "ok" --no-session-persistence --tools ""` | macOS Keychain (`Claude Code-credentials`) or `~/.claude/.credentials.json` |
 
 ---
