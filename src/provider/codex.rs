@@ -46,6 +46,7 @@ struct CodexRateLimitDetails {
 struct CodexRateLimitWindow {
     used_percent: Option<f64>,
     limit_window_seconds: Option<i64>,
+    reset_after_seconds: Option<i64>,
     reset_at: Option<i64>,
 }
 
@@ -272,10 +273,32 @@ impl Provider for CodexProvider {
             .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
 
         let now = Utc::now();
+        let limit_sec = primary.limit_window_seconds.unwrap_or(18000);
+        let reset_after = primary.reset_after_seconds.unwrap_or_else(|| {
+            primary_reset.map(|r| (r - now).num_seconds()).unwrap_or(limit_sec)
+        });
+        let elapsed_in_window = (limit_sec - reset_after).max(0);
+        let used_pct = primary.used_percent.unwrap_or(0.0);
+
+        // OpenAI's /wham/usage endpoint dynamically generates reset_at = now + 18000
+        // and reset_after_seconds = 18000 when idle (0% used, no active turn in the 5h window).
+        // A 5h window is ONLY genuinely active if quota has been consumed (>0%)
+        // or the countdown has actually started ticking down (elapsed >= 10s).
         let is_active = match primary_reset {
-            Some(reset_time) => reset_time > now,
+            Some(reset_time) => {
+                if reset_time <= now {
+                    false
+                } else if used_pct > 0.0 {
+                    true
+                } else {
+                    // 0% used: check if clock has actually started ticking down
+                    elapsed_in_window >= 10
+                }
+            }
             None => false,
         };
+
+        let active_resets_at = if is_active { primary_reset } else { None };
 
         let summary = if is_active {
             if let Some(reset_time) = primary_reset {
@@ -299,7 +322,7 @@ impl Provider for CodexProvider {
 
         Ok(UsageSnapshot {
             is_active,
-            resets_at: primary_reset,
+            resets_at: active_resets_at,
             used_percent: primary.used_percent,
             secondary_resets_at: secondary_reset,
             secondary_used_percent: secondary.as_ref().and_then(|s| s.used_percent),

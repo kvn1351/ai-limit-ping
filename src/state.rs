@@ -53,6 +53,17 @@ impl ProviderState {
 
     /// Whether the 5h window is due for a ping (i.e. reset timestamp is in the past or window is free)
     pub fn is_due_for_ping(&self, buffer_seconds: u64) -> bool {
+        if !self.is_active {
+            // If window is free / inactive, it is due for ping!
+            // Anti-rapid-loop guard: do not re-ping if we already pinged within the last 120 seconds
+            if let Some(last_ping) = self.last_ping_at {
+                if (Utc::now() - last_ping).num_seconds() < 120 {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         match self.window_resets_at {
             Some(reset) => {
                 let due_time = reset + chrono::Duration::seconds(buffer_seconds as i64);
@@ -130,5 +141,39 @@ impl AppState {
 
     pub fn set_provider(&mut self, state: ProviderState) {
         self.providers.insert(state.id.clone(), state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_due_for_ping_when_inactive() {
+        let mut p = ProviderState::new("codex", "Codex");
+        p.is_active = false;
+        p.last_ping_at = None;
+        assert!(p.is_due_for_ping(5));
+
+        // Anti-rapid-loop: if pinged 30 seconds ago, should NOT be due
+        p.last_ping_at = Some(Utc::now() - chrono::Duration::seconds(30));
+        assert!(!p.is_due_for_ping(5));
+
+        // If pinged 150 seconds ago, should be due again
+        p.last_ping_at = Some(Utc::now() - chrono::Duration::seconds(150));
+        assert!(p.is_due_for_ping(5));
+    }
+
+    #[test]
+    fn test_is_due_for_ping_when_active() {
+        let mut p = ProviderState::new("codex", "Codex");
+        p.is_active = true;
+        // Window resets in 2 hours
+        p.window_resets_at = Some(Utc::now() + chrono::Duration::hours(2));
+        assert!(!p.is_due_for_ping(5));
+
+        // Window reset 10 seconds ago
+        p.window_resets_at = Some(Utc::now() - chrono::Duration::seconds(10));
+        assert!(p.is_due_for_ping(5));
     }
 }

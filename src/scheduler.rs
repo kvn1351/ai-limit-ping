@@ -8,7 +8,7 @@ use colored::Colorize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 pub struct Scheduler {
     config: Config,
@@ -83,13 +83,15 @@ impl Scheduler {
             if p.is_available().await {
                 active_providers.push(p.clone());
                 println!(
-                    "{} Provider {} is active",
+                    "[{}] {} Provider {} is active",
+                    log_timestamp(),
                     "✓".green(),
                     p.display_name().bold()
                 );
             } else {
                 println!(
-                    "{} Provider {} not configured/available (skipping)",
+                    "[{}] {} Provider {} not configured/available (skipping)",
+                    log_timestamp(),
                     "!".yellow(),
                     p.display_name()
                 );
@@ -97,14 +99,35 @@ impl Scheduler {
         }
 
         if active_providers.is_empty() {
-            println!("{}", "No providers available. Please log in to Codex, Antigravity, or Claude Code.".red());
+            println!(
+                "[{}] {}",
+                log_timestamp(),
+                "No providers available. Please log in to Codex, Antigravity, or Claude Code.".red()
+            );
             return Ok(());
         }
 
         let buffer_sec = self.config.reset_buffer_seconds;
         let tick_duration = Duration::from_secs(self.config.coarse_tick_seconds.max(5));
+        let mut last_tick_time = Utc::now();
 
         loop {
+            let now = Utc::now();
+            let elapsed_since_tick = (now - last_tick_time).num_seconds();
+            // Detect if the machine was asleep or clock jumped significantly
+            let woke_from_sleep = elapsed_since_tick > (tick_duration.as_secs() as i64 + 30);
+            last_tick_time = now;
+
+            if woke_from_sleep {
+                println!(
+                    "[{}] {} System resumed from sleep (clock jumped by {}s). Ensuring network connectivity...",
+                    log_timestamp(),
+                    "⚡".yellow().bold(),
+                    elapsed_since_tick
+                );
+                wait_for_connectivity(Duration::from_secs(30)).await;
+            }
+
             let mut state = AppState::load();
             let mut earliest_deadline = None;
 
@@ -113,11 +136,14 @@ impl Scheduler {
                 let display = provider.display_name();
                 let mut prov_state = state.get_provider_cloned(id, display);
 
-                // Check if we need to query usage (e.g. startup or state has no reset timestamp or reset has elapsed)
-                let need_query = match prov_state.window_resets_at {
+                // Check if we need to query usage:
+                // 1. Resumed from sleep (cache might be obsolete)
+                // 2. State has no reset deadline
+                // 3. Reset deadline elapsed or is due
+                // 4. Provider is inactive and needs fresh live state
+                let need_query = woke_from_sleep || match prov_state.window_resets_at {
                     Some(resets_at) => {
                         let elapsed_sec = (Utc::now() - resets_at).num_seconds();
-                        // If it reset more than 60s ago and is not active, or state is empty
                         elapsed_sec > 60 || (!prov_state.is_active && Utc::now() >= resets_at)
                     }
                     None => true,
@@ -125,20 +151,22 @@ impl Scheduler {
 
                 if need_query {
                     info!("[{}] Refreshing usage limits from provider...", id);
-                    match provider.fetch_usage().await {
-                        Ok(usage) => {
-                            info!("[{}] {}", id, usage.summary);
-                            prov_state.is_active = usage.is_active;
-                            prov_state.window_resets_at = usage.resets_at;
-                            prov_state.used_percent = usage.used_percent;
-                            prov_state.secondary_resets_at = usage.secondary_resets_at;
-                            prov_state.secondary_used_percent = usage.secondary_used_percent;
-                            prov_state.last_checked_at = Some(Utc::now());
-                            state.set_provider(prov_state.clone());
-                            let _ = state.save();
-                        }
-                        Err(e) => {
-                            warn!("[{}] Failed to fetch usage: {}", id, e);
+                    if wait_for_connectivity(Duration::from_secs(10)).await {
+                        match provider.fetch_usage().await {
+                            Ok(usage) => {
+                                info!("[{}] {}", id, usage.summary);
+                                prov_state.is_active = usage.is_active;
+                                prov_state.window_resets_at = usage.resets_at;
+                                prov_state.used_percent = usage.used_percent;
+                                prov_state.secondary_resets_at = usage.secondary_resets_at;
+                                prov_state.secondary_used_percent = usage.secondary_used_percent;
+                                prov_state.last_checked_at = Some(Utc::now());
+                                state.set_provider(prov_state.clone());
+                                let _ = state.save();
+                            }
+                            Err(e) => {
+                                warn!("[{}] Failed to fetch usage: {}", id, e);
+                            }
                         }
                     }
                 }
@@ -148,7 +176,8 @@ impl Scheduler {
 
                 if is_due {
                     println!(
-                        "{} [{}] 5h limit window has reset or is due for ping. Triggering...",
+                        "[{}] {} [{}] 5h limit window has reset or is due for ping. Triggering...",
+                        log_timestamp(),
                         "→".cyan().bold(),
                         display
                     );
@@ -162,7 +191,8 @@ impl Scheduler {
                     // Check if an active turn is running
                     if let Ok(true) = provider.is_active_task_running().await {
                         println!(
-                            "{} [{}] Active session detected mid-turn. Waiting for user request to anchor window.",
+                            "[{}] {} [{}] Active session detected mid-turn. Waiting for user request to anchor window.",
+                            log_timestamp(),
                             "⏳".yellow(),
                             display
                         );
@@ -172,16 +202,17 @@ impl Scheduler {
                     match provider.trigger_ping(dry_run).await {
                         Ok(res) => {
                             println!(
-                                "{} [{}] {}",
+                                "[{}] {} [{}] {}",
+                                log_timestamp(),
                                 "✓".green().bold(),
                                 display,
                                 res.message.green()
                             );
                             prov_state.last_ping_at = Some(Utc::now());
                             prov_state.last_ping_status = Some(res.message.clone());
+                            prov_state.is_active = true;
                             if prov_state.window_resets_at.is_none() {
                                 prov_state.window_resets_at = Some(Utc::now() + chrono::Duration::hours(5));
-                                prov_state.is_active = true;
                             }
                             state.set_provider(prov_state.clone());
                             let _ = state.save();
@@ -195,8 +226,8 @@ impl Scheduler {
                                 // Grace period then re-read usage to record the new reset deadline
                                 sleep(Duration::from_secs(12)).await;
                                 if let Ok(new_usage) = provider.fetch_usage().await {
-                                    prov_state.is_active = new_usage.is_active;
-                                    prov_state.window_resets_at = new_usage.resets_at.or(Some(Utc::now() + chrono::Duration::hours(5)));
+                                    prov_state.is_active = new_usage.is_active || prov_state.is_active;
+                                    prov_state.window_resets_at = new_usage.resets_at.or(prov_state.window_resets_at);
                                     prov_state.used_percent = new_usage.used_percent;
                                     prov_state.last_checked_at = Some(Utc::now());
                                     state.set_provider(prov_state.clone());
@@ -205,7 +236,13 @@ impl Scheduler {
                             }
                         }
                         Err(e) => {
-                            error!("[{}] Ping failed: {}", id, e);
+                            eprintln!(
+                                "[{}] {} [{}] Failed to ping: {}",
+                                log_timestamp(),
+                                "✗".red().bold(),
+                                display,
+                                e
+                            );
                             prov_state.last_ping_at = Some(Utc::now());
                             prov_state.last_ping_status = Some(format!("Failed: {}", e));
                             if prov_state.window_resets_at.is_none() {
@@ -240,4 +277,8 @@ impl Scheduler {
             sleep(tick_duration).await;
         }
     }
+}
+
+fn log_timestamp() -> String {
+    Utc::now().with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string()
 }
