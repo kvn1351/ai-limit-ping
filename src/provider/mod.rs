@@ -4,6 +4,7 @@ pub mod codex;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use crate::reset_credits::ResetCreditInventory;
 
 #[derive(Debug, Clone)]
 pub struct UsageSnapshot {
@@ -39,6 +40,11 @@ pub trait Provider: Send + Sync {
 
     /// Fetches the latest usage limits and reset timestamps from the API / CLI
     async fn fetch_usage(&self) -> Result<UsageSnapshot>;
+
+    /// Fetches banked reset credits, when supported by the provider
+    async fn fetch_reset_credits(&self) -> Result<Option<ResetCreditInventory>> {
+        Ok(None)
+    }
 
     /// Triggers a synthetic minimal turn to restart the 5-hour rolling window
     async fn trigger_ping(&self, dry_run: bool) -> Result<PingResult>;

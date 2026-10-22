@@ -2,8 +2,8 @@ use crate::config::Config;
 use crate::network::wait_for_connectivity;
 use crate::provider::{antigravity::AntigravityProvider, claude::ClaudeProvider, codex::CodexProvider, Provider};
 use crate::state::AppState;
-use anyhow::Result;
-use chrono::Utc;
+use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
 use colored::Colorize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,6 +13,12 @@ use tracing::{info, warn};
 pub struct Scheduler {
     config: Config,
     providers: Vec<Arc<dyn Provider>>,
+}
+
+#[derive(Default)]
+struct ResetCreditRefresh {
+    last_attempt: Option<DateTime<Utc>>,
+    retry_pending: bool,
 }
 
 impl Scheduler {
@@ -34,44 +40,103 @@ impl Scheduler {
         Self { config, providers }
     }
 
-    pub fn send_notification(&self, title: &str, message: &str) {
+    pub async fn send_notification(&self, title: &str, message: &str) -> Result<()> {
         if !self.config.notify {
-            return;
+            return Ok(());
         }
 
         #[cfg(target_os = "macos")]
-        {
-            let script = format!(
-                "display notification \"{}\" with title \"{}\"",
-                message.replace('"', "\\\""),
-                title.replace('"', "\\\"")
-            );
-            let _ = std::process::Command::new("osascript")
+        let mut command = {
+            let mut command = tokio::process::Command::new("osascript");
+            command
                 .arg("-e")
-                .arg(&script)
-                .spawn();
-        }
+                .arg("on run argv\n display notification (item 2 of argv) with title (item 1 of argv)\nend run")
+                .arg(title)
+                .arg(message);
+            command
+        };
 
         #[cfg(target_os = "windows")]
-        {
-            let script = format!(
+        let mut command = {
+            let mut command = tokio::process::Command::new("powershell");
+            command.arg("-Command").arg(format!(
                 "[reflection.assembly]::loadwithpartialname('System.Windows.Forms'); [System.Windows.Forms.MessageBox]::Show('{}', '{}')",
                 message.replace('\'', "''"),
                 title.replace('\'', "''")
-            );
-            let _ = std::process::Command::new("powershell")
-                .arg("-Command")
-                .arg(&script)
-                .spawn();
+            ));
+            command
+        };
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let mut command = {
+            let mut command = tokio::process::Command::new("notify-send");
+            command.arg(title).arg(message);
+            command
+        };
+
+        command.kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(10), command.output())
+            .await
+            .context("Desktop notification command timed out")?
+            .context("Failed to launch desktop notification command")?;
+        if !output.status.success() {
+            return Err(anyhow!("Desktop notification command failed: {}", output.status));
+        }
+        Ok(())
+    }
+
+    async fn check_reset_credit_reminders(
+        &self,
+        provider: &dyn Provider,
+        state: &mut AppState,
+        refresh: &mut ResetCreditRefresh,
+        force_refresh: bool,
+        dry_run: bool,
+    ) -> Result<()> {
+        if !self.config.notify {
+            return Ok(());
         }
 
-        #[cfg(target_os = "linux")]
-        {
-            let _ = std::process::Command::new("notify-send")
-                .arg(title)
-                .arg(message)
-                .spawn();
+        let now = Utc::now();
+        let elapsed = refresh.last_attempt.map(|last| now - last);
+        let refresh_interval = if refresh.retry_pending {
+            chrono::Duration::minutes(5)
+        } else {
+            chrono::Duration::hours(1)
+        };
+        let hourly_refresh = elapsed.map_or(true, |elapsed| elapsed >= refresh_interval);
+        let reminder_due = state.reset_credit_reminders.has_due_reminders(now);
+        let threshold_refresh = reminder_due && !refresh.retry_pending;
+        if !force_refresh && !hourly_refresh && !threshold_refresh {
+            return Ok(());
         }
+
+        refresh.last_attempt = Some(now);
+        refresh.retry_pending = true;
+        // Validate availability before notifying: a credit may have been redeemed elsewhere.
+        let Some(inventory) = provider.fetch_reset_credits().await? else {
+            return Ok(());
+        };
+        state.reset_credit_reminders.replace_inventory(inventory);
+        state.save()?;
+
+        for reminder in state.reset_credit_reminders.due_reminders(Utc::now()) {
+            if dry_run {
+                println!(
+                    "[{}] [Codex] Would notify: {}",
+                    log_timestamp(),
+                    reminder.message
+                );
+                continue;
+            }
+            self.send_notification("Codex banked reset expires soon", &reminder.message)
+                .await?;
+            state.reset_credit_reminders.mark_notified(&reminder);
+            state.save()?;
+            println!("[{}] [Codex] {}", log_timestamp(), reminder.message);
+        }
+        refresh.retry_pending = dry_run;
+        Ok(())
     }
 
     pub async fn run_loop(&self, dry_run: bool) -> Result<()> {
@@ -110,6 +175,8 @@ impl Scheduler {
         let buffer_sec = self.config.reset_buffer_seconds;
         let tick_duration = Duration::from_secs(self.config.coarse_tick_seconds.max(5));
         let mut last_tick_time = Utc::now();
+        let mut reset_credit_refresh = ResetCreditRefresh::default();
+        let mut startup = true;
 
         loop {
             let now = Utc::now();
@@ -130,6 +197,21 @@ impl Scheduler {
 
             let mut state = AppState::load();
             let mut earliest_deadline = None;
+            if let Some(provider) = active_providers.iter().find(|provider| provider.id() == "codex") {
+                if let Err(error) = self
+                    .check_reset_credit_reminders(
+                        provider.as_ref(),
+                        &mut state,
+                        &mut reset_credit_refresh,
+                        startup || woke_from_sleep,
+                        dry_run,
+                    )
+                    .await
+                {
+                    warn!("[{}] [Codex] Banked reset reminders: {}", log_timestamp(), error);
+                }
+            }
+            startup = false;
 
             for provider in &active_providers {
                 let id = provider.id();
@@ -217,10 +299,12 @@ impl Scheduler {
                             state.set_provider(prov_state.clone());
                             let _ = state.save();
 
-                            self.send_notification(
+                            if let Err(error) = self.send_notification(
                                 &format!("{} Limit Window Reset", display),
                                 "New 5-hour window initiated successfully",
-                            );
+                            ).await {
+                                warn!("[{}] [{}] Notification failed: {}", log_timestamp(), id, error);
+                            }
 
                             if !dry_run {
                                 // Grace period then re-read usage to record the new reset deadline

@@ -23,7 +23,7 @@ pub struct Config {
     /// Override model for Claude Code (or None for default)
     pub claude_model: Option<String>,
 
-    /// Whether to send OS desktop notifications on pings
+    /// Whether to send OS desktop notifications for pings and banked reset expiry
     pub notify: bool,
 }
 

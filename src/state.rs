@@ -1,3 +1,5 @@
+use crate::reset_credits::ResetCreditReminders;
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -94,6 +96,8 @@ pub struct AppState {
     pub last_update_check: Option<DateTime<Utc>>,
     #[serde(default)]
     pub latest_known_version: Option<String>,
+    #[serde(default)]
+    pub reset_credit_reminders: ResetCreditReminders,
 }
 
 impl AppState {

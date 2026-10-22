@@ -1,7 +1,8 @@
 use super::{PingResult, Provider, UsageSnapshot};
+use crate::reset_credits::{ResetCredit, ResetCreditInventory};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -11,6 +12,8 @@ use tokio::process::Command;
 const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 const CODEX_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_RESET_CREDITS_ENDPOINT: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexAuthTokens {
@@ -48,6 +51,22 @@ struct CodexRateLimitWindow {
     limit_window_seconds: Option<i64>,
     reset_after_seconds: Option<i64>,
     reset_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexResetCreditsResponse {
+    available_count: usize,
+    credits: Vec<CodexResetCredit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexResetCredit {
+    id: String,
+    status: String,
+    #[serde(default)]
+    expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 pub struct CodexProvider {
@@ -228,6 +247,71 @@ impl Provider for CodexProvider {
 
     async fn is_available(&self) -> bool {
         Self::auth_file_path().exists()
+    }
+
+    async fn fetch_reset_credits(&self) -> Result<Option<ResetCreditInventory>> {
+        let (token, account_id) = self.get_valid_access_token().await?;
+        let account_id = account_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| anyhow!("Codex reset credits requires a non-empty account ID"))?
+            .to_owned();
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
+
+        let resp = client
+            .get(CODEX_RESET_CREDITS_ENDPOINT)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "ai-limit-ping")
+            .header("Accept", "application/json")
+            .header("ChatGPT-Account-Id", &account_id)
+            .send()
+            .await
+            .context("Failed to query Codex reset credits endpoint")?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "Codex reset credits API error HTTP {}",
+                resp.status()
+            ));
+        }
+
+        let data: CodexResetCreditsResponse = resp
+            .json()
+            .await
+            .context("Failed to parse Codex reset credits JSON")?;
+        let mut credits = Vec::with_capacity(data.available_count.min(data.credits.len()));
+        for credit in data
+            .credits
+            .into_iter()
+            .filter(|credit| credit.status == "available")
+            .take(data.available_count)
+        {
+
+            let title = credit
+                .title
+                .and_then(|title| {
+                    if title.trim().is_empty() {
+                        None
+                    } else {
+                        Some(title)
+                    }
+                })
+                .unwrap_or_else(|| "Full reset".to_owned());
+            credits.push(ResetCredit {
+                id: credit.id,
+                title,
+                expires_at: credit.expires_at,
+            });
+        }
+
+        Ok(Some(ResetCreditInventory {
+            account_id,
+            credits,
+        }))
     }
 
     async fn fetch_usage(&self) -> Result<UsageSnapshot> {

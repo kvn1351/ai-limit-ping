@@ -26,6 +26,7 @@ Many AI subscriptions, especially at lower tiers, don't run on fixed global rese
   - **Claude Code**: `claude -p "ok" --no-session-persistence --tools ""`
 - **Zero-Configuration Setup**: Works out of the box without any initial configuration. Intelligent defaults are automatically generated on first run.
 - **Zero-Quota Usage Checks**: Reads usage from read-only endpoints without spending any user quota.
+- **Banked Codex Reset Reminders**: Desktop alerts at 24 hours, 3 hours, and 1 hour before earned reset credits expire, with restart-safe catch-up.
 
 ---
 
@@ -149,6 +150,30 @@ alp watch
 # Update alp to the latest release from GitHub
 alp update
 ```
+
+---
+
+## Banked Codex Reset Reminders
+
+With Codex enabled and `"notify": true`, the daemon (or `alp watch`) sends expiry
+reminders for each available banked reset at **24h, 3h, and 1h remaining**. These
+are reminders to use earned reset credits, not the normal five-hour window timer.
+No credits are redeemed automatically.
+
+- Startup and wake-up refresh the inventory. If multiple thresholds were missed,
+  only the most urgent reminder is sent: starting with 50 minutes remaining sends
+  one “expires in 50 minutes” alert, not three overdue alerts.
+- Each notification shows the actual time remaining. Delivery history is saved
+  per account and credit in `state.json`, preventing duplicates after restarts.
+- Inventory is checked hourly and again before a due reminder, not on every
+  scheduler tick. Failed checks or notification commands are retried after five
+  minutes; redeemed, expired, and non-expiring credits do not generate reminders.
+- `alp watch --dry-run` logs due reminders without delivering them or recording
+  them as delivered. Set `"notify": false` to disable notifications and these
+  inventory checks.
+
+The Mac must be awake and logged in to deliver notifications. macOS notification
+permissions and Focus settings can hide banners; `alp` catches up when it next runs.
 
 ---
 
