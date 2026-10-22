@@ -1,12 +1,14 @@
 use crate::config::Config;
 use crate::daemon::DaemonManager;
 use crate::provider::{antigravity::AntigravityProvider, claude::ClaudeProvider, codex::CodexProvider, Provider};
+use crate::reset_credits::ResetCreditInventory;
 use crate::scheduler::Scheduler;
 use crate::state::AppState;
-use anyhow::Result;
-use chrono::Utc;
+use anyhow::{Context, Result};
+use chrono::{DateTime, Local, Utc};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use std::io::Write;
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -28,6 +30,9 @@ pub enum Commands {
         #[arg(short, long)]
         refresh: bool,
     },
+
+    /// List available Codex banked resets, with live expiry countdowns
+    Resets,
 
     /// Trigger a synthetic ping immediately to restart the 5-hour window
     Ping {
@@ -96,6 +101,7 @@ pub async fn run_cli() -> Result<()> {
 
     let result = match cli.command.unwrap_or(Commands::Status { refresh: false }) {
         Commands::Status { refresh } => handle_status(&config, refresh).await,
+        Commands::Resets => handle_resets(&config).await,
         Commands::Ping { provider, dry_run } => handle_ping(&config, &provider, dry_run).await,
         Commands::Watch { dry_run } => {
             let scheduler = Scheduler::new(config);
@@ -136,6 +142,78 @@ pub async fn run_cli() -> Result<()> {
     }
 
     result
+}
+
+async fn handle_resets(config: &Config) -> Result<()> {
+    let inventory = CodexProvider::new(config.codex_model.clone())
+        .fetch_reset_credits()
+        .await?
+        .context("Codex banked reset inventory is unavailable")?;
+    render_resets(&mut std::io::stdout().lock(), inventory, Utc::now())?;
+    Ok(())
+}
+
+fn render_resets(
+    output: &mut impl Write,
+    mut inventory: ResetCreditInventory,
+    now: DateTime<Utc>,
+) -> std::io::Result<()> {
+    inventory.credits.retain(|credit| {
+        credit.expires_at.map_or(true, |expiry| expiry > now)
+    });
+    inventory.credits.sort_unstable_by_key(|credit| {
+        (credit.expires_at.is_none(), credit.expires_at)
+    });
+    writeln!(
+        output,
+        "{} — {} available (live)",
+        "Codex banked resets".bold(),
+        inventory.credits.len()
+    )?;
+    if inventory.credits.is_empty() {
+        writeln!(output, "\nNo banked resets are currently available.")?;
+        return Ok(());
+    }
+    for (index, credit) in inventory.credits.iter().enumerate() {
+        writeln!(output, "\n{}. {}", index + 1, credit.title.bold())?;
+        if let Some(expiry) = credit.expires_at {
+            let seconds = (expiry - now).num_seconds();
+            let remaining = reset_time_left(seconds);
+            let remaining = if seconds <= 3_600 {
+                remaining.red().bold()
+            } else if seconds <= 10_800 {
+                remaining.yellow().bold()
+            } else {
+                remaining.normal()
+            };
+            writeln!(output, "   Time left:  {}", remaining)?;
+            writeln!(
+                output,
+                "   Expires:    {}",
+                expiry.with_timezone(&Local).format("%a %d %b %Y, %H:%M:%S %:z")
+            )?;
+        } else {
+            writeln!(output, "   Time left:  Does not expire")?;
+        }
+    }
+    Ok(())
+}
+
+fn reset_time_left(seconds: i64) -> String {
+    let days = seconds / 86_400;
+    let hours = (seconds / 3_600) % 24;
+    let minutes = (seconds / 60) % 60;
+    if days > 0 {
+        format!("{}d {}h {}m", days, hours, minutes)
+    } else if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else if seconds >= 60 {
+        format!("{}m {}s", minutes, seconds % 60)
+    } else if seconds > 0 {
+        format!("{}s", seconds)
+    } else {
+        "<1s".to_owned()
+    }
 }
 fn print_titlecard(_state: &AppState) {
     let line1_right = format!(
@@ -464,4 +542,38 @@ async fn handle_ping(config: &Config, target: &str, dry_run: bool) -> Result<()>
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod reset_listing_tests {
+    use super::*;
+    use crate::reset_credits::ResetCredit;
+    use chrono::Duration;
+
+    #[test]
+    fn lists_only_remaining_credits_in_expiry_order() {
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let make_credit = |id: &str, expires_at| ResetCredit {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            expires_at,
+        };
+        let inventory = ResetCreditInventory {
+            account_id: "listing-test".to_owned(),
+            credits: vec![
+                make_credit("never-expiring", None),
+                make_credit("later-credit", Some(now + Duration::days(2))),
+                make_credit("expired-credit", Some(now - Duration::seconds(1))),
+                make_credit("expiry-boundary", Some(now)),
+                make_credit("soon-credit", Some(now + Duration::minutes(50))),
+            ],
+        };
+        let mut output = Vec::new();
+        render_resets(&mut output, inventory, now).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("expired-credit"));
+        assert!(!output.contains("expiry-boundary"));
+        assert!(output.find("soon-credit").unwrap() < output.find("later-credit").unwrap());
+        assert!(output.find("later-credit").unwrap() < output.find("never-expiring").unwrap());
+    }
 }

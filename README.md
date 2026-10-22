@@ -136,6 +136,9 @@ alp status
 # Force a live refresh from provider endpoints
 alp status --refresh
 
+# List available banked Codex resets with live time remaining and expiry dates
+alp resets
+
 # Test a dry-run ping (prints what command would run without spending quota)
 alp ping --dry-run
 
@@ -159,6 +162,12 @@ With Codex enabled and `"notify": true`, the daemon (or `alp watch`) sends expir
 reminders for each available banked reset at **24h, 3h, and 1h remaining**. These
 are reminders to use earned reset credits, not the normal five-hour window timer.
 No credits are redeemed automatically.
+
+Run **`alp resets`** to fetch the signed-in Codex account's available banked resets.
+The list is ordered by soonest expiry and shows a live countdown plus the local
+expiry date and UTC offset. Non-expiring credits appear last; expired credits
+are omitted. This read-only command works even when notifications are disabled
+and does not redeem credits or change reminder delivery history.
 
 - Startup and wake-up refresh the inventory. If multiple thresholds were missed,
   only the most urgent reminder is sent: starting with 50 minutes remaining sends
