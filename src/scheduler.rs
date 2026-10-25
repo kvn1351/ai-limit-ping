@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::network::wait_for_connectivity;
-use crate::provider::{antigravity::AntigravityProvider, claude::ClaudeProvider, codex::CodexProvider, Provider};
+use crate::provider::{enabled_providers, Provider};
 use crate::state::AppState;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
@@ -23,19 +23,7 @@ struct ResetCreditRefresh {
 
 impl Scheduler {
     pub fn new(config: Config) -> Self {
-        let mut providers: Vec<Arc<dyn Provider>> = Vec::new();
-
-        if config.enabled_providers.iter().any(|p| p == "codex") {
-            providers.push(Arc::new(CodexProvider::new(config.codex_model.clone())));
-        }
-        if config.enabled_providers.iter().any(|p| p == "antigravity" || p == "agy") {
-            providers.push(Arc::new(AntigravityProvider::new(
-                config.antigravity_model.clone(),
-            )));
-        }
-        if config.enabled_providers.iter().any(|p| p == "claude") {
-            providers.push(Arc::new(ClaudeProvider::new(config.claude_model.clone())));
-        }
+        let providers = enabled_providers(&config);
 
         Self { config, providers }
     }

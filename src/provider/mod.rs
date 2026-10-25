@@ -5,6 +5,8 @@ pub mod codex;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use crate::reset_credits::ResetCreditInventory;
+use crate::config::Config;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct UsageSnapshot {
@@ -51,6 +53,25 @@ pub trait Provider: Send + Sync {
 
     /// Detects if an active user turn is already in progress, avoiding synthetic interference
     async fn is_active_task_running(&self) -> Result<bool>;
+}
+
+/// Selects configured providers for status, manual pings, and the scheduler.
+pub fn enabled_providers(config: &Config) -> Vec<Arc<dyn Provider>> {
+    let mut providers: Vec<Arc<dyn Provider>> = Vec::new();
+
+    if config.enabled_providers.iter().any(|p| p == "codex") {
+        providers.push(Arc::new(codex::CodexProvider::new(config.codex_model.clone())));
+    }
+    if config.enabled_providers.iter().any(|p| p == "antigravity" || p == "agy") {
+        providers.push(Arc::new(antigravity::AntigravityProvider::new(
+            config.antigravity_model.clone(),
+        )));
+    }
+    if config.enabled_providers.iter().any(|p| p == "claude") {
+        providers.push(Arc::new(claude::ClaudeProvider::new(config.claude_model.clone())));
+    }
+
+    providers
 }
 
 /// Returns an isolated scratch directory for synthetic pings so subprocesses don't scan user files/folders
@@ -126,5 +147,39 @@ pub fn is_binary_available(name: &str) -> bool {
             .arg("--version")
             .output()
             .is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excludes_disabled_providers() {
+        let config = Config {
+            enabled_providers: vec!["codex".into(), "antigravity".into()],
+            ..Config::default()
+        };
+        let ids: Vec<_> = enabled_providers(&config).iter().map(|p| p.id()).collect();
+        assert_eq!(ids, ["codex", "antigravity"]);
+    }
+
+    #[test]
+    fn empty_enabled_list_disables_every_provider() {
+        let config = Config {
+            enabled_providers: Vec::new(),
+            ..Config::default()
+        };
+        assert!(enabled_providers(&config).is_empty());
+    }
+
+    #[test]
+    fn antigravity_aliases_do_not_schedule_duplicate_pings() {
+        let config = Config {
+            enabled_providers: vec!["agy".into(), "antigravity".into(), "agy".into()],
+            ..Config::default()
+        };
+        let ids: Vec<_> = enabled_providers(&config).iter().map(|p| p.id()).collect();
+        assert_eq!(ids, ["antigravity"]);
     }
 }

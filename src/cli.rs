@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::daemon::DaemonManager;
-use crate::provider::{antigravity::AntigravityProvider, claude::ClaudeProvider, codex::CodexProvider, Provider};
+use crate::provider::{codex::CodexProvider, enabled_providers, Provider};
 use crate::reset_credits::ResetCreditInventory;
 use crate::scheduler::Scheduler;
 use crate::state::AppState;
@@ -9,7 +9,6 @@ use chrono::{DateTime, Local, Utc};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::io::Write;
-use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(
@@ -34,9 +33,9 @@ pub enum Commands {
     /// List available Codex banked resets, with live expiry countdowns
     Resets,
 
-    /// Trigger a synthetic ping immediately to restart the 5-hour window
+    /// Trigger a synthetic ping immediately for enabled providers
     Ping {
-        /// Provider to ping: codex, antigravity, claude, or all
+        /// Enabled provider to ping: codex, antigravity, claude, or all
         #[arg(default_value = "all")]
         provider: String,
 
@@ -378,11 +377,7 @@ fn print_titlecard(_state: &AppState) {
 async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
     let mut state = AppState::load();
     print_titlecard(&state);
-    let providers: Vec<Arc<dyn Provider>> = vec![
-        Arc::new(CodexProvider::new(config.codex_model.clone())),
-        Arc::new(AntigravityProvider::new(config.antigravity_model.clone())),
-        Arc::new(ClaudeProvider::new(config.claude_model.clone())),
-    ];
+    let providers = enabled_providers(config);
 
     let now = Utc::now();
 
@@ -500,11 +495,7 @@ async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
 }
 
 async fn handle_ping(config: &Config, target: &str, dry_run: bool) -> Result<()> {
-    let providers: Vec<Arc<dyn Provider>> = vec![
-        Arc::new(CodexProvider::new(config.codex_model.clone())),
-        Arc::new(AntigravityProvider::new(config.antigravity_model.clone())),
-        Arc::new(ClaudeProvider::new(config.claude_model.clone())),
-    ];
+    let providers = enabled_providers(config);
 
     let mut state = AppState::load();
 
