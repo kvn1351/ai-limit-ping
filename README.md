@@ -17,6 +17,7 @@ Many AI subscriptions, especially at lower tiers, don't run on fixed global rese
 ## Highlights
 
 - **Near-0% CPU & Minimal RAM**: Native compiled Rust binary (< 3 MB stripped) that sleeps in OS kernel wait queues (`kqueue` on macOS, wait objects on Windows).
+- **Terminal-Compatible Logo**: Uses the 256-color palette in Apple Terminal and preserves truecolor in iTerm or terminals advertising `COLORTERM=truecolor` / `24bit`.
 - **Anti-API-Spam Strategy**: Rather than constantly querying endpoints, `alp` caches exact reset timestamps locally (`state.json`). While a window is active, it sleeps until the deadline and **never spams provider APIs**.
 - **Sleep & Wake Resilient**: When your laptop goes to sleep and wakes up past the reset deadline, `alp` immediately detects the clock jump.
 - **Network-Aware**: When resuming from sleep, Wi-Fi can take a few seconds to connect. `alp` waits for network connectivity before attempting queries or pings instead of failing prematurely.

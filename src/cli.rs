@@ -214,6 +214,72 @@ fn reset_time_left(seconds: i64) -> String {
         "<1s".to_owned()
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BannerColorMode {
+    TrueColor,
+    Ansi256,
+}
+
+impl BannerColorMode {
+    fn detect(term_program: &str, colorterm: &str) -> Self {
+        // Terminal.app can inherit COLORTERM=truecolor from shell configuration.
+        if term_program == "Apple_Terminal" {
+            Self::Ansi256
+        } else if term_program == "iTerm.app"
+            || colorterm.eq_ignore_ascii_case("truecolor")
+            || colorterm.eq_ignore_ascii_case("24bit")
+        {
+            Self::TrueColor
+        } else {
+            Self::Ansi256
+        }
+    }
+
+    fn write_color(self, output: &mut String, rgb: (u8, u8, u8), background: bool) {
+        use std::fmt::Write;
+        let plane = if background { 48 } else { 38 };
+        match self {
+            Self::TrueColor => {
+                let (r, g, b) = rgb;
+                write!(output, "\x1b[{};2;{};{};{}m", plane, r, g, b).unwrap();
+            }
+            Self::Ansi256 => {
+                write!(output, "\x1b[{};5;{}m", plane, xterm_color(rgb)).unwrap();
+            }
+        }
+    }
+}
+
+fn xterm_color(rgb: (u8, u8, u8)) -> u8 {
+    fn channel(value: u8) -> u8 {
+        match value {
+            0..=47 => 0,
+            48..=114 => 1,
+            115..=154 => 2,
+            155..=194 => 3,
+            195..=234 => 4,
+            _ => 5,
+        }
+    }
+    fn distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> i32 {
+        let r = a.0 as i32 - b.0 as i32;
+        let g = a.1 as i32 - b.1 as i32;
+        let blue = a.2 as i32 - b.2 as i32;
+        r * r + g * g + blue * blue
+    }
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let (r, g, b) = (channel(rgb.0), channel(rgb.1), channel(rgb.2));
+    let cube = (LEVELS[r as usize], LEVELS[g as usize], LEVELS[b as usize]);
+    let gray_index = ((rgb.0 as i32 + rgb.1 as i32 + rgb.2 as i32 - 9) / 30).clamp(0, 23) as u8;
+    let gray = 8 + 10 * gray_index;
+    if distance(rgb, (gray, gray, gray)) < distance(rgb, cube) {
+        232 + gray_index
+    } else {
+        16 + 36 * r + 6 * g + b
+    }
+}
+
 fn print_titlecard(_state: &AppState) {
     let line1_right = format!(
         "{} {}",
@@ -222,8 +288,10 @@ fn print_titlecard(_state: &AppState) {
     );
     let daemon_status = DaemonManager::status_line();
 
-    let fg_c = |r: u8, g: u8, b: u8| format!("\x1b[38;2;{};{};{}m", r, g, b);
-    let bg_c = |r: u8, g: u8, b: u8| format!("\x1b[48;2;{};{};{}m", r, g, b);
+    let colors = BannerColorMode::detect(
+        &std::env::var("TERM_PROGRAM").unwrap_or_default(),
+        &std::env::var("COLORTERM").unwrap_or_default(),
+    );
     let rst = "\x1b[0m";
 
     // Wooden Hourglass with Golden Sand (Wide Plinth design):
@@ -332,19 +400,26 @@ fn print_titlecard(_state: &AppState) {
         let row_t = &grid[y_top];
         let row_b = &grid[y_bot];
 
-        let mut row_str = String::with_capacity(10 * 25);
+        let mut row_str = String::with_capacity(10 * 45);
         for x in 0..10 {
             let ct = row_t[x];
             let cb = row_b[x];
             match (ct, cb) {
-                (Some((rt, gt, bt)), Some((rb, gb, bb))) => {
-                    row_str.push_str(&format!("{}{}\u{2580}{}", fg_c(rt, gt, bt), bg_c(rb, gb, bb), rst));
+                (Some(top), Some(bottom)) => {
+                    colors.write_color(&mut row_str, top, false);
+                    colors.write_color(&mut row_str, bottom, true);
+                    row_str.push('\u{2580}');
+                    row_str.push_str(rst);
                 }
-                (Some((rt, gt, bt)), None) => {
-                    row_str.push_str(&format!("{}\u{2580}{}", fg_c(rt, gt, bt), rst));
+                (Some(top), None) => {
+                    colors.write_color(&mut row_str, top, false);
+                    row_str.push('\u{2580}');
+                    row_str.push_str(rst);
                 }
-                (None, Some((rb, gb, bb))) => {
-                    row_str.push_str(&format!("{}\u{2584}{}", fg_c(rb, gb, bb), rst));
+                (None, Some(bottom)) => {
+                    colors.write_color(&mut row_str, bottom, false);
+                    row_str.push('\u{2584}');
+                    row_str.push_str(rst);
                 }
                 (None, None) => {
                     row_str.push(' ');
@@ -571,5 +646,33 @@ mod reset_listing_tests {
         assert!(!output.contains("expiry-boundary"));
         assert!(output.find("soon-credit").unwrap() < output.find("later-credit").unwrap());
         assert!(output.find("later-credit").unwrap() < output.find("never-expiring").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod banner_color_tests {
+    use super::*;
+
+    #[test]
+    fn apple_terminal_uses_supported_palette_even_with_inherited_truecolor() {
+        assert_eq!(BannerColorMode::detect("Apple_Terminal", "truecolor"), BannerColorMode::Ansi256);
+        assert_eq!(BannerColorMode::detect("Apple_Terminal", ""), BannerColorMode::Ansi256);
+    }
+
+    #[test]
+    fn iterm_and_advertised_truecolor_keep_full_color_depth() {
+        assert_eq!(BannerColorMode::detect("iTerm.app", ""), BannerColorMode::TrueColor);
+        assert_eq!(BannerColorMode::detect("", "truecolor"), BannerColorMode::TrueColor);
+        assert_eq!(BannerColorMode::detect("", "24bit"), BannerColorMode::TrueColor);
+        assert_eq!(BannerColorMode::detect("", ""), BannerColorMode::Ansi256);
+    }
+
+    #[test]
+    fn palette_mapping_preserves_saturated_colors_and_neutral_grays() {
+        assert_eq!(xterm_color((255, 0, 0)), 196);
+        assert_eq!(xterm_color((255, 255, 0)), 226);
+        assert_eq!(xterm_color((0, 0, 0)), 16);
+        assert_eq!(xterm_color((255, 255, 255)), 231);
+        assert_eq!(xterm_color((128, 128, 128)), 244);
     }
 }
