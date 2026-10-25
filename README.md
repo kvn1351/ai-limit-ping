@@ -23,6 +23,7 @@ Many AI subscriptions, especially at lower tiers, don't run on fixed global rese
 - **Official Headless Triggers**: Uses official CLI non-interactive modes with sandbox flags, leaving zero conversation clutter in your history:
   - **Codex**: `codex exec --ephemeral --json --sandbox read-only ...`
   - **Antigravity**: `agy -p "ok" --sandbox --output-format json --effort low --model gemini-3.8-flash-low`
+  - **Antigravity Argon**: `agy -p "ok" --sandbox --output-format json --effort low --model gemini-4-argon-low`
   - **Claude Code**: `claude -p "ok" --no-session-persistence --tools ""`
 - **Zero-Configuration Setup**: Works out of the box without any initial configuration. Intelligent defaults are automatically generated on first run.
 - **Zero-Quota Usage Checks**: Reads usage from read-only endpoints without spending any user quota.
@@ -35,10 +36,10 @@ Many AI subscriptions, especially at lower tiers, don't run on fixed global rese
 > [!IMPORTANT]
 > **Prerequisites:** The official CLI harness (`codex`, `agy`, or `claude`) for any provider you wish to use must be installed and logged in on your system. `alp` dispatches prompt requests through these official harnesses, so you only need the CLI tools installed for the providers you want to keep active.
 
-| Provider | CLI Tool | Read 5h Limit (0 Quota) | Headless Ping | Auth Source |
+| Provider | CLI Tool | Read Limits (0 Quota) | Headless Ping | Auth Source |
 |---|---|---|---|---|
 | **Codex** | `codex` | Direct GET `/wham/usage` | `codex exec --ephemeral --sandbox read-only` | `~/.codex/auth.json` (auto-refreshed via OpenAI OAuth) |
-| **Antigravity (`agy`)** | `agy` | Zero-turn CLI: `agy -p "/usage"` | `agy -p "ok" --sandbox --output-format json --effort low --model gemini-3.8-flash-low` | `~/.gemini/antigravity-cli/antigravity-oauth-token` |
+| **Antigravity** | `agy` | Zero-turn CLI: `agy -p "/usage"` | Flash Low for the 5h window; Argon Low for its separate weekly window | `~/.gemini/antigravity-cli/antigravity-oauth-token` |
 | **Claude Code** | `claude` | Direct GET `/api/oauth/usage` | `claude -p "ok" --no-session-persistence --tools ""` | macOS Keychain (`Claude Code-credentials`) or `~/.claude/.credentials.json` |
 
 ---
@@ -144,7 +145,8 @@ alp ping --dry-run
 
 # Trigger a manual ping right now
 alp ping codex
-alp ping antigravity
+alp ping antigravity       # Separately ping Flash Low and Argon Low
+alp ping antigravity-argon # Ping only Argon Low
 alp ping all
 
 # Run foreground watcher with live countdowns
@@ -153,6 +155,27 @@ alp watch
 # Update alp to the latest release from GitHub
 alp update
 ```
+
+### Antigravity quota tracks
+
+Antigravity keeps two independent weekly limits. `alp status` preserves both:
+
+| Track | Ping model | Quota buckets | Daemon behavior |
+|---|---|---|---|
+| Antigravity | `gemini-3.8-flash-low` | `gemini-5h` and `gemini-weekly` | Existing 5-hour reset scheduling |
+| Antigravity Argon | `gemini-4-argon-low` | `gemini-argon-wtu-weekly` | Ping only after a live check confirms exactly 100% remaining |
+
+Manual `alp ping` / `alp ping all` include both models; `alp ping antigravity`
+also sends two separate pings regardless of whether their windows are already active.
+The daemon does not ping Argon again while any of its weekly quota is used, even
+if an old reset timestamp has passed. It caches the weekly deadline and refreshes
+on startup, wake, or reset; missing or failed Argon usage checks never authorize a ping.
+The separate Argon bucket is required: its quota is not inferred from the regular
+Gemini weekly bucket.
+
+Keeping `"antigravity"` (or `"agy"`) in `enabled_providers` enables both tracks;
+removing it disables both. `antigravity_model` still controls only the regular
+5-hour ping and defaults to Flash Low. The separate weekly ping uses Argon Low.
 
 ---
 

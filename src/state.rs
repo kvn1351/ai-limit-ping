@@ -1,4 +1,5 @@
 use crate::reset_credits::ResetCreditReminders;
+use crate::provider::{LimitWindow, UsageSnapshot};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -11,15 +12,17 @@ use std::path::PathBuf;
 pub struct ProviderState {
     pub id: String,
     pub display_name: String,
-    /// Exact UTC timestamp when the current 5-hour window will reset
+    #[serde(default)]
+    pub window: LimitWindow,
+    /// Exact UTC timestamp when the primary quota window will reset
     pub window_resets_at: Option<DateTime<Utc>>,
     /// Exact UTC timestamp for secondary window (e.g. weekly cap)
     pub secondary_resets_at: Option<DateTime<Utc>>,
-    /// Current 5h window used percentage (0.0 - 100.0)
+    /// Current primary window used percentage (0.0 - 100.0)
     pub used_percent: Option<f64>,
     /// Secondary window used percentage
     pub secondary_used_percent: Option<f64>,
-    /// Whether a 5h window is currently active and counting down
+    /// Whether the primary quota window is currently active
     pub is_active: bool,
     /// When this provider's limit was last queried
     pub last_checked_at: Option<DateTime<Utc>>,
@@ -34,6 +37,7 @@ impl ProviderState {
         Self {
             id: id.into(),
             display_name: display_name.into(),
+            window: LimitWindow::FiveHour,
             window_resets_at: None,
             secondary_resets_at: None,
             used_percent: None,
@@ -45,6 +49,36 @@ impl ProviderState {
         }
     }
 
+    pub fn apply_usage(&mut self, usage: &UsageSnapshot, window: LimitWindow) {
+        self.window = window;
+        self.is_active = usage.is_active;
+        self.window_resets_at = usage.resets_at;
+        self.used_percent = usage.used_percent;
+        self.secondary_resets_at = usage.secondary_resets_at;
+        self.secondary_used_percent = usage.secondary_used_percent;
+        self.last_checked_at = Some(Utc::now());
+    }
+
+    pub fn needs_usage_refresh(&self, expected_window: LimitWindow, force: bool) -> bool {
+        self.needs_usage_refresh_at(expected_window, force, Utc::now())
+    }
+
+    fn needs_usage_refresh_at(&self, expected_window: LimitWindow, force: bool, now: DateTime<Utc>) -> bool {
+        if force || self.window != expected_window || self.last_checked_at.is_none() {
+            return true;
+        }
+        if self.window == LimitWindow::Weekly {
+            if self.used_percent == Some(0.0) {
+                return self.is_due_for_ping_at(0, now);
+            }
+            return self.window_resets_at.map(|reset| now >= reset).unwrap_or(true);
+        }
+        match self.window_resets_at {
+            Some(reset) => (now - reset).num_seconds() > 60 || (!self.is_active && now >= reset),
+            None => true,
+        }
+    }
+
     /// Returns how many seconds remain until reset (negative if already reset)
     pub fn remaining_seconds(&self) -> Option<i64> {
         self.window_resets_at.map(|reset| {
@@ -53,13 +87,28 @@ impl ProviderState {
         })
     }
 
-    /// Whether the 5h window is due for a ping (i.e. reset timestamp is in the past or window is free)
+    /// Whether this quota needs a ping; weekly quotas must be confirmed completely unused.
     pub fn is_due_for_ping(&self, buffer_seconds: u64) -> bool {
+        self.is_due_for_ping_at(buffer_seconds, Utc::now())
+    }
+
+    fn is_due_for_ping_at(&self, buffer_seconds: u64, now: DateTime<Utc>) -> bool {
+        if self.window == LimitWindow::Weekly {
+            if self.used_percent != Some(0.0) {
+                return false;
+            }
+            if self.last_ping_at.is_some_and(|last| (now - last).num_seconds() < 120) {
+                return false;
+            }
+            return self.window_resets_at
+                .map(|reset| now >= reset + chrono::Duration::seconds(buffer_seconds as i64))
+                .unwrap_or(true);
+        }
         if !self.is_active {
             // If window is free / inactive, it is due for ping!
             // Anti-rapid-loop guard: do not re-ping if we already pinged within the last 120 seconds
             if let Some(last_ping) = self.last_ping_at {
-                if (Utc::now() - last_ping).num_seconds() < 120 {
+                if (now - last_ping).num_seconds() < 120 {
                     return false;
                 }
             }
@@ -69,7 +118,7 @@ impl ProviderState {
         match self.window_resets_at {
             Some(reset) => {
                 let due_time = reset + chrono::Duration::seconds(buffer_seconds as i64);
-                Utc::now() >= due_time
+                now >= due_time
             }
             None => {
                 // If reset time is not available from API (e.g. Claude Code CLI fallback),
@@ -79,7 +128,7 @@ impl ProviderState {
                         let next_due = last_ping
                             + chrono::Duration::hours(5)
                             + chrono::Duration::seconds(buffer_seconds as i64);
-                        Utc::now() >= next_due
+                        now >= next_due
                     }
                     None => true,
                 }
@@ -179,5 +228,50 @@ mod tests {
         // Window reset 10 seconds ago
         p.window_resets_at = Some(Utc::now() - chrono::Duration::seconds(10));
         assert!(p.is_due_for_ping(5));
+    }
+
+    #[test]
+    fn weekly_quota_must_be_full_even_after_its_cached_deadline_passes() {
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut state = ProviderState::new("antigravity-argon", "Antigravity Argon");
+        state.window = LimitWindow::Weekly;
+        state.window_resets_at = Some(now - chrono::Duration::seconds(10));
+        for used in [None, Some(0.000001), Some(100.0)] {
+            state.used_percent = used;
+            assert!(!state.is_due_for_ping_at(5, now));
+        }
+        state.used_percent = Some(0.0);
+        assert!(state.is_due_for_ping_at(5, now));
+    }
+
+    #[test]
+    fn consumed_weekly_quota_is_cached_until_reset_but_refreshed_on_wake() {
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut state = ProviderState::new("antigravity-argon", "Antigravity Argon");
+        state.window = LimitWindow::Weekly;
+        state.used_percent = Some(0.000001);
+        state.last_checked_at = Some(now);
+        state.window_resets_at = Some(now + chrono::Duration::days(7));
+        assert!(!state.needs_usage_refresh_at(LimitWindow::Weekly, false, now));
+        assert!(state.needs_usage_refresh_at(LimitWindow::Weekly, true, now));
+        assert!(state.needs_usage_refresh_at(LimitWindow::Weekly, false, now + chrono::Duration::days(7)));
+    }
+
+    #[test]
+    fn full_weekly_quota_respects_ping_cooldown_and_failure_backoff() {
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut state = ProviderState::new("antigravity-argon", "Antigravity Argon");
+        state.window = LimitWindow::Weekly;
+        state.used_percent = Some(0.0);
+        state.last_checked_at = Some(now);
+        state.last_ping_at = Some(now);
+        assert!(!state.is_due_for_ping_at(5, now + chrono::Duration::seconds(119)));
+        assert!(!state.needs_usage_refresh_at(LimitWindow::Weekly, false, now + chrono::Duration::seconds(119)));
+        assert!(state.is_due_for_ping_at(5, now + chrono::Duration::seconds(120)));
+
+        state.window_resets_at = Some(now + chrono::Duration::minutes(15));
+        assert!(!state.is_due_for_ping_at(5, now + chrono::Duration::minutes(14)));
+        assert!(!state.needs_usage_refresh_at(LimitWindow::Weekly, false, now + chrono::Duration::minutes(14)));
+        assert!(state.is_due_for_ping_at(5, now + chrono::Duration::minutes(15) + chrono::Duration::seconds(5)));
     }
 }

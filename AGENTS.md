@@ -108,11 +108,13 @@ Whenever modifying core logic or shipping bug fixes, **always** follow this exac
 ### Antigravity (`src/provider/antigravity.rs`)
 - **Binary**: `agy`. Uses `resolve_binary_path("agy")` across Homebrew and user bins.
 - **Usage Command**: `agy -p /usage --output-format json --print-timeout 30s` executed in `~/.local/share/ai-limit-ping/sandbox`.
-- **Reset Logic**: Reads `gemini-5h` bucket. `reset_time` is parsed as RFC3339 UTC.
+- **Reset Logic**: The regular track reads `gemini-5h` plus `gemini-weekly`. A separate `antigravity-argon` track reads only `gemini-argon-wtu-weekly`; never infer Argon quota from the regular Gemini weekly bucket. Reset times are RFC3339 UTC.
 - **Headless Ping**:
   ```bash
-  agy -p ok --ephemeral --sandbox -m gemini-3.8-flash-low
+  agy -p ok --sandbox --output-format json --effort low --model gemini-3.8-flash-low
   ```
+- **Separate Weekly Ping**: `agy -p ok --sandbox --output-format json --effort low --model gemini-4-argon-low`. The daemon requires a successful live usage check with exactly `remaining_fraction == 1.0`; any consumption, missing bucket, or failed query must prevent the ping. Cache the consumed weekly deadline until reset or wake; never substitute a synthetic 5-hour deadline.
+- **Manual Pings**: `alp ping`, `alp ping all`, and `alp ping antigravity` include both tracks. `alp ping antigravity-argon` targets only Argon. Enabling/disabling `antigravity` controls both tracks. Keep the normal 5-hour Flash Low ping unchanged.
 
 ### Claude Code (`src/provider/claude.rs`)
 - **Credentials**: Extracts OAuth token from macOS Keychain (`Claude Code-credentials`) or `~/.claude/.credentials.json`.

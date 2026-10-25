@@ -8,13 +8,30 @@ use crate::reset_credits::ResetCreditInventory;
 use crate::config::Config;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitWindow {
+    #[default]
+    FiveHour,
+    Weekly,
+}
+
+impl LimitWindow {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FiveHour => "5-hour",
+            Self::Weekly => "weekly",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UsageSnapshot {
-    /// Whether the 5-hour rolling window is active and counting down
+    /// Whether the primary quota window is active
     pub is_active: bool,
-    /// The exact UTC time when the 5-hour window will reset
+    /// The exact UTC time when the primary quota window will reset
     pub resets_at: Option<DateTime<Utc>>,
-    /// Percentage used in the 5-hour window (0.0 to 100.0)
+    /// Percentage used in the primary quota window (0.0 to 100.0)
     pub used_percent: Option<f64>,
     /// Secondary window reset time (e.g. weekly limit)
     pub secondary_resets_at: Option<DateTime<Utc>>,
@@ -37,6 +54,15 @@ pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
 
+    fn limit_window(&self) -> LimitWindow {
+        LimitWindow::FiveHour
+    }
+
+    /// CLI target that includes this provider's quota tracks.
+    fn ping_target(&self) -> &'static str {
+        self.id()
+    }
+
     /// Checks if CLI tool or credentials for this provider are installed/configured
     async fn is_available(&self) -> bool;
 
@@ -48,7 +74,7 @@ pub trait Provider: Send + Sync {
         Ok(None)
     }
 
-    /// Triggers a synthetic minimal turn to restart the 5-hour rolling window
+    /// Sends a synthetic minimal turn to activate the relevant quota window
     async fn trigger_ping(&self, dry_run: bool) -> Result<PingResult>;
 
     /// Detects if an active user turn is already in progress, avoiding synthetic interference
@@ -66,6 +92,7 @@ pub fn enabled_providers(config: &Config) -> Vec<Arc<dyn Provider>> {
         providers.push(Arc::new(antigravity::AntigravityProvider::new(
             config.antigravity_model.clone(),
         )));
+        providers.push(Arc::new(antigravity::AntigravityProvider::argon()));
     }
     if config.enabled_providers.iter().any(|p| p == "claude") {
         providers.push(Arc::new(claude::ClaudeProvider::new(config.claude_model.clone())));
@@ -161,7 +188,7 @@ mod tests {
             ..Config::default()
         };
         let ids: Vec<_> = enabled_providers(&config).iter().map(|p| p.id()).collect();
-        assert_eq!(ids, ["codex", "antigravity"]);
+        assert_eq!(ids, ["codex", "antigravity", "antigravity-argon"]);
     }
 
     #[test]
@@ -180,6 +207,6 @@ mod tests {
             ..Config::default()
         };
         let ids: Vec<_> = enabled_providers(&config).iter().map(|p| p.id()).collect();
-        assert_eq!(ids, ["antigravity"]);
+        assert_eq!(ids, ["antigravity", "antigravity-argon"]);
     }
 }

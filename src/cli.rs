@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::daemon::DaemonManager;
-use crate::provider::{codex::CodexProvider, enabled_providers, Provider};
+use crate::provider::{codex::CodexProvider, enabled_providers, LimitWindow, Provider};
 use crate::reset_credits::ResetCreditInventory;
 use crate::scheduler::Scheduler;
 use crate::state::AppState;
@@ -23,7 +23,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Show current 5-hour limits, countdowns, and cached rollover state
+    /// Show current quota limits, countdowns, and cached rollover state
     Status {
         /// Force an immediate network refresh from provider APIs instead of using local cache
         #[arg(short, long)]
@@ -35,7 +35,7 @@ pub enum Commands {
 
     /// Trigger a synthetic ping immediately for enabled providers
     Ping {
-        /// Enabled provider to ping: codex, antigravity, claude, or all
+        /// Enabled provider to ping: codex, antigravity (both models), antigravity-argon, claude, or all
         #[arg(default_value = "all")]
         provider: String,
 
@@ -402,12 +402,7 @@ async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
             match p.fetch_usage().await {
                 Ok(u) => {
                     println!("{}", "done".green());
-                    prov_state.is_active = u.is_active;
-                    prov_state.window_resets_at = u.resets_at;
-                    prov_state.used_percent = u.used_percent;
-                    prov_state.secondary_resets_at = u.secondary_resets_at;
-                    prov_state.secondary_used_percent = u.secondary_used_percent;
-                    prov_state.last_checked_at = Some(now);
+                    prov_state.apply_usage(&u, p.limit_window());
                     state.set_provider(prov_state.clone());
                     let _ = state.save();
                 }
@@ -417,7 +412,13 @@ async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
             }
         }
 
-        let status_badge = if prov_state.is_active {
+        let ready_badge = match prov_state.window {
+            LimitWindow::FiveHour => "WINDOW FREE (Ready for ping)",
+            LimitWindow::Weekly => "QUOTA FULL (Ready for ping)",
+        };
+        let status_badge = if p.limit_window() == LimitWindow::Weekly && prov_state.used_percent.is_none() {
+            "UNKNOWN (refresh required)".yellow().bold().to_string()
+        } else if prov_state.is_active {
             if let Some(reset) = prov_state.window_resets_at {
                 if reset > now {
                     let diff = (reset - now).num_seconds();
@@ -451,17 +452,20 @@ async fn handle_status(config: &Config, refresh: bool) -> Result<()> {
                     reset.with_timezone(&chrono::Local).format("%H:%M:%S")
                 )
             } else {
-                "WINDOW FREE (Ready for ping)".cyan().bold().to_string()
+                ready_badge.cyan().bold().to_string()
             }
         } else {
-            "WINDOW FREE (Ready for ping)".cyan().bold().to_string()
+            ready_badge.cyan().bold().to_string()
         };
 
         println!("\n{} {}", "•".cyan().bold(), display.bold());
         println!("  Status:          {}", status_badge);
 
         if let Some(used) = prov_state.used_percent {
-            println!("  5h Window Used:  {:.1}%", used);
+            match prov_state.window {
+                LimitWindow::FiveHour => println!("  5h Window Used:  {:.1}%", used),
+                LimitWindow::Weekly => println!("  Weekly Used:     {:.6}%", used),
+            }
         }
 
         if let Some(sec_used) = prov_state.secondary_used_percent {
@@ -501,7 +505,7 @@ async fn handle_ping(config: &Config, target: &str, dry_run: bool) -> Result<()>
 
     for p in providers {
         let id = p.id();
-        if target != "all" && target != id && target != p.display_name().to_lowercase() {
+        if target != "all" && target != id && target != p.ping_target() && target != p.display_name().to_lowercase() {
             continue;
         }
 
@@ -522,6 +526,7 @@ async fn handle_ping(config: &Config, target: &str, dry_run: bool) -> Result<()>
                     let mut prov_state = state.get_provider_cloned(id, p.display_name());
                     prov_state.last_ping_at = Some(Utc::now());
                     prov_state.last_ping_status = Some(res.message);
+                    prov_state.window = p.limit_window();
                     state.set_provider(prov_state);
                     let _ = state.save();
                 }

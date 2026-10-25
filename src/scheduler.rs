@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::network::wait_for_connectivity;
-use crate::provider::{enabled_providers, Provider};
-use crate::state::AppState;
+use crate::provider::{enabled_providers, LimitWindow, Provider};
+use crate::state::{AppState, ProviderState};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
@@ -185,13 +185,14 @@ impl Scheduler {
 
             let mut state = AppState::load();
             let mut earliest_deadline = None;
+            let force_usage_refresh = startup || woke_from_sleep;
             if let Some(provider) = active_providers.iter().find(|provider| provider.id() == "codex") {
                 if let Err(error) = self
                     .check_reset_credit_reminders(
                         provider.as_ref(),
                         &mut state,
                         &mut reset_credit_refresh,
-                        startup || woke_from_sleep,
+                        force_usage_refresh,
                         dry_run,
                     )
                     .await
@@ -206,18 +207,9 @@ impl Scheduler {
                 let display = provider.display_name();
                 let mut prov_state = state.get_provider_cloned(id, display);
 
-                // Check if we need to query usage:
-                // 1. Resumed from sleep (cache might be obsolete)
-                // 2. State has no reset deadline
-                // 3. Reset deadline elapsed or is due
-                // 4. Provider is inactive and needs fresh live state
-                let need_query = woke_from_sleep || match prov_state.window_resets_at {
-                    Some(resets_at) => {
-                        let elapsed_sec = (Utc::now() - resets_at).num_seconds();
-                        elapsed_sec > 60 || (!prov_state.is_active && Utc::now() >= resets_at)
-                    }
-                    None => true,
-                };
+                let window = provider.limit_window();
+                let mut usage_refreshed = false;
+                let need_query = prov_state.needs_usage_refresh(window, force_usage_refresh);
 
                 if need_query {
                     info!("[{}] Refreshing usage limits from provider...", id);
@@ -225,12 +217,8 @@ impl Scheduler {
                         match provider.fetch_usage().await {
                             Ok(usage) => {
                                 info!("[{}] {}", id, usage.summary);
-                                prov_state.is_active = usage.is_active;
-                                prov_state.window_resets_at = usage.resets_at;
-                                prov_state.used_percent = usage.used_percent;
-                                prov_state.secondary_resets_at = usage.secondary_resets_at;
-                                prov_state.secondary_used_percent = usage.secondary_used_percent;
-                                prov_state.last_checked_at = Some(Utc::now());
+                                prov_state.apply_usage(&usage, window);
+                                usage_refreshed = true;
                                 state.set_provider(prov_state.clone());
                                 let _ = state.save();
                             }
@@ -241,15 +229,15 @@ impl Scheduler {
                     }
                 }
 
-                // Check if window is due for a ping
-                let is_due = prov_state.is_due_for_ping(buffer_sec);
+                let is_due = ping_is_due(&prov_state, window, usage_refreshed, buffer_sec);
 
                 if is_due {
                     println!(
-                        "[{}] {} [{}] 5h limit window has reset or is due for ping. Triggering...",
+                        "[{}] {} [{}] {} quota is due for ping. Triggering...",
                         log_timestamp(),
                         "→".cyan().bold(),
-                        display
+                        display,
+                        window.label()
                     );
 
                     // Ensure network is up (especially after sleep)
@@ -280,16 +268,22 @@ impl Scheduler {
                             );
                             prov_state.last_ping_at = Some(Utc::now());
                             prov_state.last_ping_status = Some(res.message.clone());
-                            prov_state.is_active = true;
-                            if prov_state.window_resets_at.is_none() {
-                                prov_state.window_resets_at = Some(Utc::now() + chrono::Duration::hours(5));
+                            if window == LimitWindow::Weekly {
+                                // Do not invent a weekly reset; wait for the live quota update.
+                                prov_state.is_active = false;
+                                prov_state.window_resets_at = Some(Utc::now() + chrono::Duration::seconds(120));
+                            } else {
+                                prov_state.is_active = true;
+                                if prov_state.window_resets_at.is_none() {
+                                    prov_state.window_resets_at = Some(Utc::now() + chrono::Duration::hours(5));
+                                }
                             }
                             state.set_provider(prov_state.clone());
                             let _ = state.save();
 
                             if let Err(error) = self.send_notification(
                                 &format!("{} Limit Window Reset", display),
-                                "New 5-hour window initiated successfully",
+                                &res.message,
                             ).await {
                                 warn!("[{}] [{}] Notification failed: {}", log_timestamp(), id, error);
                             }
@@ -297,11 +291,12 @@ impl Scheduler {
                             if !dry_run {
                                 // Grace period then re-read usage to record the new reset deadline
                                 sleep(Duration::from_secs(12)).await;
-                                if let Ok(new_usage) = provider.fetch_usage().await {
-                                    prov_state.is_active = new_usage.is_active || prov_state.is_active;
-                                    prov_state.window_resets_at = new_usage.resets_at.or(prov_state.window_resets_at);
-                                    prov_state.used_percent = new_usage.used_percent;
-                                    prov_state.last_checked_at = Some(Utc::now());
+                                if let Ok(mut new_usage) = provider.fetch_usage().await {
+                                    if window == LimitWindow::FiveHour {
+                                        new_usage.is_active |= prov_state.is_active;
+                                        new_usage.resets_at = new_usage.resets_at.or(prov_state.window_resets_at);
+                                    }
+                                    prov_state.apply_usage(&new_usage, window);
                                     state.set_provider(prov_state.clone());
                                     let _ = state.save();
                                 }
@@ -348,6 +343,35 @@ impl Scheduler {
             // Utc::now() >= reset_at and trigger the ping immediately!
             sleep(tick_duration).await;
         }
+    }
+}
+
+fn ping_is_due(state: &ProviderState, window: LimitWindow, usage_refreshed: bool, buffer: u64) -> bool {
+    state.window == window
+        && (window != LimitWindow::Weekly || usage_refreshed)
+        && state.is_due_for_ping(buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weekly_ping_requires_live_confirmation_even_with_full_cached_quota() {
+        let mut state = ProviderState::new("antigravity-argon", "Antigravity Argon");
+        state.window = LimitWindow::Weekly;
+        state.used_percent = Some(0.0);
+        assert!(!ping_is_due(&state, LimitWindow::Weekly, false, 5));
+        assert!(ping_is_due(&state, LimitWindow::Weekly, true, 5));
+
+        state.used_percent = Some(0.000001);
+        assert!(!ping_is_due(&state, LimitWindow::Weekly, true, 5));
+    }
+
+    #[test]
+    fn flash_schedule_does_not_depend_on_argon_quota_or_a_fresh_query() {
+        let state = ProviderState::new("antigravity", "Antigravity");
+        assert!(ping_is_due(&state, LimitWindow::FiveHour, false, 5));
     }
 }
 
